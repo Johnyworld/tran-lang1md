@@ -1,0 +1,13 @@
+# API 토큰·비밀번호
+secrets.json
+
+# 롬에서 파생된 데이터 (원저작물) — VRAM/RAM 덤프, 타일 렌더, 추출 대본
+work/
+
+# 롬 자체를 레포에 두게 될 경우 대비
+*.gen
+Langrisser.md
+
+# 파이썬
+__pycache__/
+*.pyc
