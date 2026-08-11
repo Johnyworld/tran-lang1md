@@ -32,6 +32,7 @@ from asm import UI_MARKER, build_uploader_labels, build_uploader_msg  # noqa: E4
 from asm import build_uploader_ui  # noqa: E402
 from chain import parse_chain  # noqa: E402
 from events import e82c_sites  # noqa: E402
+import menu  # noqa: E402
 from script import decode  # noqa: E402
 
 SRC = Path("/Users/rotein/Downloads/Langrisser.md")
@@ -492,6 +493,9 @@ def main() -> None:
     namestr, nameids, name_n = build_names(g)
     chains, chain_log = build_chains(rom, src, g)
     uistr, uitbl, ui_log = build_ui(rom, src, g)
+    # 메뉴는 폰트가 아니라 미리 그려둔 그래픽이다. 글리프 풀과 타일맵 서술자를
+    # 우리가 다시 쓰므로 위의 글리프 테이블·코드표와 아무것도 공유하지 않는다.
+    menu_log = menu.build(rom, src)
 
     place(rom, NAMESTR_AT, namestr, "이름 문자열표")
     place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")
@@ -564,8 +568,11 @@ def main() -> None:
 
     out = Path("work/korom_all.md")
     out.write_bytes(rom)
+    menu.preview(src, rom, Path("work/menu_preview.png"))
     print("\nUI 문자열표")
     print("\n".join(ui_log))
+    print("\n메뉴 그래픽 (풀 재배치 + 서술자 재작성)")
+    print("\n".join(menu_log))
     print("\n대사 체인")
     print("\n".join(chain_log))
     print(f"\n전역 글리프 {len(g.gid)}개 / 이름 {name_n}개")

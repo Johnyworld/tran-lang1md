@@ -22,6 +22,7 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 | 파일 | 용도 |
 |---|---|
 | `tools/build_all.py` | 한글화 롬 빌드 → `work/korom_all.md` |
+| `tools/menu.py` | 메뉴 그래픽 — 글리프 풀 재배치 + `$5CDC` 타일맵 서술자 재작성 |
 | `tools/chain.py` | 본편 대사 체인 파서 (앵커 하나 = 대화 한 덩이) |
 | `tools/events.py` | 스테이지 이벤트 표 -> 앵커 (이야기 순서) |
 | `tools/sheet.py` | `translation/dialogue.tsv` 재생성 (기존 번역 보존) |
@@ -44,6 +45,7 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 | `translation/dialogue.tsv` | 본편 대사. 앵커 + 메시지 번호로 식별 |
 | `translation/names.tsv` | 이름판 78개 (`0x2AE64` 표 순서) |
 | `translation/ui.tsv` | UI — 클래스·마법·아이템 이름 |
+| `translation/menu.tsv` | 메뉴 그래픽. 창 레코드 + 줄 번호로 식별 |
 | `translation/glossary.tsv` | 고유명사 표기 결정과 근거 |
 
 ## 폰트
