@@ -88,23 +88,62 @@ def is_dialogue(raw: bytes) -> bool:
     return sum(1 for b in raw if 0xA1 <= b <= 0xDD) >= 4
 
 
+def skip_term(rom: bytes, ff: int) -> int:
+    """0xFF 종료자 위치 -> 다음 메시지 시작. 종료자는 0xFF 또는 0xFF 0x00 이다."""
+    p = ff + 1
+    return p + 1 if rom[p:p + 1] == b"\x00" else p
+
+
+PTR_TABLES = [(0x38A38, 20), (0x38BF2, 20), (0x3962E, 20),
+              (0x2087C, 14), (0x3A322, 11)]
+
+
+def seeds(rom: bytes) -> set[int]:
+    """게임이 실제로 사용하는 메시지 시작 주소 — 이것만이 정렬의 근거다.
+
+    포인터 테이블 엔트리 + 코드 즉치(refs.json). 블록 경계 추측은 쓰지 않는다.
+    """
+    out = set()
+    for tbl, n in PTR_TABLES:
+        for k in range(n):
+            out.add(int.from_bytes(rom[tbl + k * 4:tbl + k * 4 + 4], "big"))
+    refs = Path("work/refs.json")
+    if refs.exists():
+        out |= {int(r["target"], 16) for r in json.loads(refs.read_text())}
+    return {a for a in out if a < len(rom)}
+
+
 def extract(rom: bytes, blocks: list[tuple[int, int]]) -> list[dict]:
-    """대본 영역을 0xFF00 구분자로 분할해 메시지를 뽑는다."""
+    """검증된 앵커에서 시작해 0xFF 구분자를 따라 앞으로 걸어나간다.
+
+    앵커가 없는 블록은 블록 시작 직전 0xFF 뒤에서 시작한다(정렬 보장 없음).
+    """
     msgs, seen = [], set()
-    for off, n in blocks:
-        # 블록 경계에서 잘리지 않도록 앞뒤로 넉넉히 잡고 구분자로 자른다
-        lo, hi = max(0, off - 64), min(len(rom), off + n + 64)
-        pos = lo
+
+    def walk(pos: int, hi: int, strict: bool) -> None:
+        """strict=True  앵커에서 출발 — 비대사를 만나면 뱅크 끝으로 보고 멈춘다.
+        strict=False  블록 훑기 — 비대사는 건너뛰며 계속한다(정렬 보장 없음)."""
         while pos < hi:
             end = rom.find(TERM, pos, hi)
             if end < 0:
                 break
             raw = rom[pos:end]
-            if is_dialogue(raw) and pos not in seen:
-                seen.add(pos)
-                msgs.append({"addr": f"{pos:06X}", "len": len(raw),
-                             "text": decode(raw)})
-            pos = end + 1
+            if is_dialogue(raw):
+                if pos not in seen:
+                    seen.add(pos)
+                    msgs.append({"addr": f"{pos:06X}", "len": len(raw),
+                                 "text": decode(raw), "anchor": pos in ANCHORS})
+            elif strict:
+                break
+            pos = skip_term(rom, end)
+
+    ANCHORS = seeds(rom)
+    for a in sorted(ANCHORS):
+        walk(a, min(len(rom), a + 8192), strict=True)
+    for off, n in blocks:
+        hi = min(len(rom), off + n + 64)
+        prev = rom.rfind(b"\xff", max(0, off - 512), off)
+        walk(skip_term(rom, prev) if prev >= 0 else off, hi, strict=False)
     return sorted(msgs, key=lambda m: m["addr"])
 
 
