@@ -14,3 +14,6 @@ __pycache__/
 
 # 폰트 원본 zip (압축 해제본이 이미 있음)
 font/*.zip
+
+# macOS
+.DS_Store
