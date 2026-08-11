@@ -186,3 +186,36 @@ def build_uploader_a1(kfont: int, slot_base: int, target: int) -> bytes:
     body[bne_at:bne_at + 2] = w(len(body) - (bne_at - 2) - 2)      # .out
     body += w(0x4EF9) + l(target)                # jmp (target).l  꼬리호출
     return bytes(body)
+
+
+def build_uploader_labels(kfont: int, slot_base: int, target: int,
+                          label_src: int, label_dst: int, label_tiles: int) -> bytes:
+    """글리프 업로드에 이어 고정 타일 블록(승리/패배 라벨)도 올린다.
+
+    라벨은 원본이 2플레인 압축 형식(타일당 16B = 색상15 마스크 + 색상14+15 합집합)
+    이지만 **그 형식을 알 필요가 없다.** 우리가 만든 비압축 4bpp 타일을 같은 VRAM
+    자리에 덮어쓰면 되기 때문이다. 원본 데이터를 찾거나 맞출 이유가 없었다.
+    """
+    body = bytearray(build_uploader_a1(kfont, slot_base, target))
+    # 꼬리의 jmp target (6B) 을 떼고 라벨 업로드를 끼운 뒤 다시 붙인다
+    tail = body[-6:]
+    assert tail[:2] == w(0x4EF9), "꼬리가 jmp 가 아니다"
+    body = body[:-6]
+
+    body += w(0x48E7) + w(0xFFF0)                # movem.l d0-d7/a0-a3, -(a7)
+    body += w(0x40E7)                            # move.w sr, -(a7)
+    body += w(0x46FC) + w(0x2700)                # move.w #$2700, sr
+    body += w(0x323C) + w(label_dst)             # move.w #dst, d1
+    body += w(0x7E00 | 0)                        # moveq #0, d7
+    body += w(0x3E3C) + w(label_tiles - 1)       # move.w #tiles-1, d7
+    body += lea_abs(VDP_DATA, 2)                 # lea (C00000).l, a2
+    body += lea_abs(label_src, 3)                # lea LABEL, a3
+    loop_at = len(body)
+    body += vdp_set_write(0, 1)                  # d0 스크래치, d1 = VRAM 주소
+    body += w(0x249B) * 8                        # move.l (a3)+, (a2)  32바이트
+    body += w(0x0641) + w(0x0020)                # addi.w #32, d1
+    body += w(0x51CF) + w((loop_at - (len(body) + 2)) & 0xFFFF)   # dbra d7, loop
+    body += w(0x46DF)                            # move.w (a7)+, sr
+    body += w(0x4CDF) + w(0x0FFF)                # movem.l (a7)+, d0-d7/a0-a3
+    body += tail
+    return bytes(body)

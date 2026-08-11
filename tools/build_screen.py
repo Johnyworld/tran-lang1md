@@ -28,16 +28,33 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from asm import build_uploader_a1  # noqa: E402
+from asm import build_uploader_labels  # noqa: E402
 
 SRC = Path("/Users/rotein/Downloads/Langrisser.md")
 VRAM = Path("work/Mega Drive/Langrisser-vdp-vram-20260811-151039.bin")
 G7_BIN = Path("font/galmuri7/font-007242d37349daf3.bin")
 G7_MAP = Path("font/galmuri7/font-007242d37349daf3_glyph_map.json")
+# 라벨 전용 폰트. Galmuri11 은 16px 에서 `ㅂ+ㅐ` 가 무너져 `배`가 `버`로 읽힌다.
+# 배/버 픽셀 차이로 후보를 줄였다 — Galmuri11 9(구분 불가) / 프리텐다드 일반 38 /
+# 둥근모꼴 50 / 프리텐다드 Bold 69. 둥근모꼴은 획이 1px 로 가늘면서 자모가 셀을
+# 꽉 채워, 원본 한자의 큰 인상에 가깝고 Bold 처럼 뭉치지도 않는다.
+# 픽셀 전용 폰트가 아니어도 자모 간격이 넓으면 16px 에서 더 잘 읽힌다.
+LABEL_BIN = Path("font/dunggeunmo/font-6883cc1477b4cbfa.bin")
+LABEL_MAP = Path("font/dunggeunmo/font-6883cc1477b4cbfa_glyph_map.json")
+
+# 勝利/敗北 라벨 — VRAM 타일 522..541 (4칸 x 5행 = 32x40px), 행 우선
+# 원본은 타일당 16바이트 2플레인(색상15 마스크 + 색상14+15 합집합)이지만
+# 그 형식을 알 필요가 없다. 우리 비압축 4bpp 타일로 같은 자리를 덮어쓴다.
+LABEL_DST, LABEL_TILES = 522 * 32, 20
+LABEL_TOP, LABEL_BOTTOM = "승리", "패배"
+OUTLINE = 14
+# Galmuri11 글리프는 16px 셀 안에서 잉크가 y=3..12 에 있다. y=0/16 에 그대로 두면
+# 라벨이 조건문(화면 행 15·17)보다 4px 위로 치우친다. 그만큼 내려 맞춘다.
+LABEL_Y = 4
 KO_TSV = Path("translation/ko.tsv")
 
 ROM_SIZE = 0x100000
-UPLOADER_AT, KFONT_AT, TEXT_AT = 0x80000, 0x81000, 0x90000
+UPLOADER_AT, KFONT_AT, LABEL_AT, TEXT_AT = 0x80000, 0x81000, 0x82000, 0x90000
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
 SLOT_BASE = 128
 CODES = list(range(0x7F, 0xA1)) + list(range(0xE0, 0xFE))   # 64개
@@ -57,6 +74,40 @@ def to_4bpp(g8: bytes) -> bytes:
             hi = INK if row >> (7 - k * 2) & 1 else BG
             lo = INK if row >> (6 - k * 2) & 1 else BG
             out.append((hi << 4) | lo)
+    return bytes(out)
+
+
+def make_labels() -> bytes:
+    """승리/패배 를 32x40px 4bpp 타일 20개로. 원본처럼 색상 14 외곽선을 넣는다."""
+    font = LABEL_BIN.read_bytes()
+    gmap = json.loads(LABEL_MAP.read_text())
+    W, H = 32, 40
+    ink = [[False] * W for _ in range(H)]
+    for row, word in ((LABEL_Y, LABEL_TOP), (16 + LABEL_Y, LABEL_BOTTOM)):
+        for i, ch in enumerate(word):
+            o = gmap[ch] * 32
+            for y in range(16):
+                hi, lo = font[o + y * 2], font[o + y * 2 + 1]
+                bits = (hi << 8) | lo
+                for x in range(16):
+                    if bits >> (15 - x) & 1:
+                        ink[row + y][i * 16 + x] = True
+    # 외곽선·그림자를 넣지 않는다.
+    #   사방 외곽선 -> 획이 깨져 보임
+    #   Bold        -> 뭉침
+    #   우하단 그림자 -> `ㅐ` 의 두 세로획 사이 틈을 메워 `ㅓ` 로 읽힘
+    # 16x16 한글의 획 간격이 좁아 어떤 장식도 획을 붙여버린다. 순수 잉크가 답이다.
+    edge = [[False] * W for _ in range(H)]
+    out = bytearray()
+    for tr in range(H // 8):
+        for tc in range(W // 8):
+            for y in range(8):
+                for k in range(4):
+                    px = []
+                    for j in range(2):
+                        gx, gy = tc * 8 + k * 2 + j, tr * 8 + y
+                        px.append(INK if ink[gy][gx] else (OUTLINE if edge[gy][gx] else BG))
+                    out.append((px[0] << 4) | px[1])
     return bytes(out)
 
 
@@ -125,7 +176,11 @@ def main() -> None:
     # 업로더 + 훅 (첫 draw 에만)
     want = b"\x4e\xb9" + STRDRAW.to_bytes(4, "big")
     assert rom[HOOK_SITE:HOOK_SITE + 6] == want, f"{HOOK_SITE:06X} 가 jsr ${STRDRAW:X} 아님"
-    code = build_uploader_a1(kfont=KFONT_AT, slot_base=SLOT_BASE, target=STRDRAW)
+    labels = make_labels()
+    rom[LABEL_AT:LABEL_AT + len(labels)] = labels
+    code = build_uploader_labels(kfont=KFONT_AT, slot_base=SLOT_BASE, target=STRDRAW,
+                                 label_src=LABEL_AT, label_dst=LABEL_DST,
+                                 label_tiles=LABEL_TILES)
     assert UPLOADER_AT + len(code) <= KFONT_AT
     rom[UPLOADER_AT:UPLOADER_AT + len(code)] = code
     rom[HOOK_SITE:HOOK_SITE + 6] = b"\x4e\xb9" + UPLOADER_AT.to_bytes(4, "big")
@@ -139,6 +194,7 @@ def main() -> None:
     out = Path("work/korom_screen.md")
     out.write_bytes(rom)
     print(f"\n글리프 합집합  {len(slots)}개 / 코드 {len(CODES)}개 / 슬롯 {256-SLOT_BASE}개")
+    print(f"라벨 타일     {LABEL_AT:06X}  {len(labels)}B ({LABEL_TILES}타일) -> VRAM {LABEL_DST:04X}")
     print(f"업로더        {UPLOADER_AT:06X}  {len(code)}B")
     print(f"훅            {HOOK_SITE:06X}  jsr {STRDRAW:06X} -> jsr {UPLOADER_AT:06X}")
     print(f"-> {out}")
