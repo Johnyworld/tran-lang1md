@@ -114,3 +114,15 @@ magic	10	ヒーリング 2	힐링 2
 magic	11	ヒーリング 3	힐링 3	
 magic	12	スリープ	슬립	
 magic	13	コンフューズ	컨퓨즈	
+system	0308E2		적의 유닛입니다	
+system	030904		움직일 수 없는 유닛	
+system	03092A		MP가 모자랍니다	
+system	03094A		마법을 못 씁니다	
+system	03097C		 유닛     X  Y  HP END	
+system	0309A6		 유닛     HP	
+system	030C2A		데이터를 저장합니다	
+system	030C50		데이터를 불러옵니다	
+system	030CE0		지휘관	
+system	031020		아이템이 없습니다	
+system	030BF8			NEW GAME/LOAD GAME/CONTINUE — 영어 라벨은 번역하지 않는다
+system	030CC6			X Y — 좌표 머리글, 영어 그대로

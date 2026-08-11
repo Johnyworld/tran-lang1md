@@ -62,6 +62,7 @@ NAME_CODES = list(range(0x0E, 0x0E + NAME_CELLS))
 # UI 전용 저바이트 코드 23개 -> 타일 198.. (클래스명 같은 '한 번에 하나' 필드용)
 UI_CODES = list(range(0x02, 0x0D)) + list(range(0x14, 0x20))
 UI_BASE, UI_STRIDE, UI_REC = 198, 16, 128   # 기록 128B = 공유 어휘 63자까지
+SYS_OFF = 8               # 팝업 단문은 클래스명 뒤 칸을 쓴다 (동시에 보여도 안 겹치게)
 UI_FIELDS = {                     # 필드 -> (원본 표, 엔트리 수, 칸 수, 배정 방식)
     "magic": (0x2B9AC, 14, 8, "shared"),
     "item":  (0x2B8E4, 10, 8, "shared"),
@@ -74,7 +75,7 @@ KINDS = ["stage", "prologue", "cond"]          # 그려지는 순서
 LABEL_DST, LABEL_TILES, LABEL_Y = 522 * 32, 20, 4
 LABEL_TOP, LABEL_BOTTOM = "승리", "패배"
 FROM_VRAM = {"。": 129, "「": 130, "」": 131, "、": 132, "・": 133}  # 게임 폰트의 가나 블록
-ASCII_OK = set(" 1234567890.,()-!?")   # 게임 ASCII 폰트로 그린다
+ASCII_OK = set(" 1234567890.,()-!?" "ABCDEFGHIJKLMNOPQRSTUVWXYZ")  # 게임 ASCII 폰트로 그린다
 
 
 PLACED: list[tuple[int, int, str]] = []
@@ -304,7 +305,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[
     for ln in UI_TSV.read_text().rstrip("\n").split("\n")[1:]:
         c = ln.split("\t")
         if len(c) >= 4 and c[3]:
-            ui[(c[0], int(c[1]))] = c[3]
+            ui[(c[0], int(c[1], 16) if c[0] == "system" else int(c[1]))] = c[3]
 
     recs: list[tuple[int, list[str]]] = []      # (타일 번호, 글리프 문자들)
     strs, log, body_off, at = bytearray(), [], 0, {}
@@ -353,6 +354,39 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[
             rom[p:p + 4] = at[field].to_bytes(4, "big")
         log.append(f"  {field:6s} {table:06X} -> {at[field]:06X}  {done}/{n} 번역 / "
                    f"lea {len(sites)}곳 / 기록 {len(recs)}개")
+
+    # 창 서술자가 물고 있는 단문 (종류 4). 텍스트는 포인터+4 에 있고 앞 4바이트는
+    # (x, y) 다. 팝업은 한 번에 하나만 뜨므로 전부 같은 코드 구간을 나눠 쓴다.
+    sysbase = UI_BASE + SYS_OFF
+    sysd = {idx: ko for (field, idx), ko in ui.items() if field == "system"}
+    done = 0
+    for rec_at in sorted(sysd):
+        ko = sysd[rec_at].replace("\\n", "\n")
+        ptr_at = rec_at + 8
+        ptr = int.from_bytes(src[ptr_at:ptr_at + 4], "big")
+        assert 0x30000 <= ptr < 0x32000, f"{rec_at:06X}: 창 포인터가 이상하다"
+        chars = [ch for ch in ko if ch not in ASCII_OK and ch != "\n"]
+        if len(chars) > len(UI_CODES) - SYS_OFF:
+            raise SystemExit(f"단문 {rec_at:06X} {ko!r} 이 팝업 칸 "
+                             f"{len(UI_CODES) - SYS_OFF}개를 넘는다")
+        rk = len(recs)
+        recs.append((sysbase, chars))
+        code_of = {ch: UI_CODES[SYS_OFF + i] for i, ch in enumerate(chars)}
+        out = bytearray(src[ptr:ptr + 4]) + bytes([UI_MARKER, rk])
+        for ch in ko:
+            if ch == "\n":
+                out += b"\x0d\x0d"
+            else:
+                out.append(ord(ch) if ch in ASCII_OK else code_of[ch])
+        out += b"\x0d\x0d\xff"
+        at_sys = UISTR_AT + len(strs)
+        strs += out
+        if len(strs) & 1:
+            strs += b"\x00"
+        rom[ptr_at:ptr_at + 4] = at_sys.to_bytes(4, "big")
+        done += 1
+    log.append(f"  system            {done}개 / 팝업 칸 {len(UI_CODES) - SYS_OFF}개 "
+               f"(타일 {sysbase}..{UI_BASE + len(UI_CODES) - 1})")
 
     for _, chars in recs:
         for ch in chars:
