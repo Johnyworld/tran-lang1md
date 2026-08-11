@@ -1,0 +1,116 @@
+field	idx	jp	ko	note
+class	0			
+class	1	ファイター	파이터	
+class	2	ファイター	파이터	
+class	3	ファイター	파이터	
+class	4	ロード	로드	
+class	5	ロード	로드	
+class	6	ロード	로드	
+class	7	ソードマスター	소드마스터	
+class	8	キング	킹	
+class	9	レンジャー	레인저	
+class	10	ナイト	나이트	
+class	11	ナイト	나이트	
+class	12	ナイト	나이트	
+class	13	ナイトマスター	나이트마스터	
+class	14	ナイトマスター	나이트마스터	
+class	15	ナイトマスター	나이트마스터	
+class	16	マジックナイト	매직나이트	
+class	17	マジックナイト	매직나이트	
+class	18	マジックナイト	매직나이트	
+class	19	グランナイト	그란나이트	
+class	20	グランナイト	그란나이트	
+class	21	クロコナイト	크로코나이트	
+class	22	サーペンナイト	서펜나이트	
+class	23	ドラゴンナイト	드래곤나이트	
+class	24	ドラゴンナイト	드래곤나이트	
+class	25	ウォーロック	워록	
+class	26	ウイザード	위저드	
+class	27	アーチメイジ	아크메이지	
+class	28	ビショップ	비숍	
+class	29	クレリック	클레릭	
+class	30	プリースト	프리스트	
+class	31	ハイプリースト	하이프리스트	
+class	32	セイント	세인트	
+class	33	ウォーロック	워록	
+class	34	ファイター	파이터	
+class	35	ファイター	파이터	
+class	36	ロード	로드	
+class	37	カイザー	카이저	
+class	38	ナイト	나이트	
+class	39	ナイト	나이트	
+class	40	ロイヤルガード	로열가드	
+class	41	ロイヤルガード	로열가드	
+class	42	グランナイト	그란나이트	
+class	43	サーペンナイト	서펜나이트	
+class	44	ウイザード	위저드	
+class	45	アーチメイジ	아크메이지	
+class	46	ビショップ	비숍	
+class	47	グレートスライム	그레이트슬라임	
+class	48	クィーンアント	퀸앤트	
+class	49	ウェアウルフ	웨어울프	
+class	50	ネクロマンサー	네크로맨서	
+class	51	コンジャラー	컨저러	
+class	52	ソーサラー	소서러	
+class	53	リビングアーマー	리빙아머	
+class	54	ワイト	와이트	
+class	55	クラーケン	크라켄	
+class	56	マスターディーノ	마스터디노	
+class	57	バジリスク	바실리스크	
+class	58	ワイバーン	와이번	
+class	59	グレートドラゴン	그레이트드래곤	
+class	60	カオス	카오스	
+class	61	シャーマン	샤먼	
+class	62	イフリート	이프리트	
+class	63			
+class	64			
+class	65	ソルジャー	솔저	
+class	66	ホースマン	호스맨	
+class	67	ライトエルフ	라이트엘프	
+class	68	モンク	몽크	
+class	69	マーマン	머맨	
+class	70	グリフォン	그리폰	
+class	71	ガードマン	가드맨	
+class	72	シビリアン	시민	
+class	73			
+class	74			
+class	75	ソルジャー	솔저	
+class	76	ホースマン	호스맨	
+class	77	ダークエルフ	다크엘프	
+class	78	リザードマン	리자드맨	
+class	79	ロイヤルソルジャ	로열솔저	
+class	80	スライム	슬라임	
+class	81	エビルアント	이블앤트	
+class	82	ウェアウルフ	웨어울프	
+class	83	スケルトン	스켈레톤	
+class	84	ボーンディーノ	본디노	
+class	85	クロウラー	크롤러	
+class	86	ゴーレム	골렘	
+class	87	リヴァイアサン	리바이어선	
+class	88	ガーゴイル	가고일	
+class	89	バーバリアン	바바리안	
+class	90	エレメンタル	엘리멘탈	
+item	0			원본이 문자열이 아니다 — 건드리지 않는다
+item	1	ラングリッサー	랑그릿사	
+item	2	グレートソード	그레이트소드	
+item	3	ドラゴンスレイヤ	드래곤슬레이어	
+item	4	デビルアックス	데빌액스	
+item	5	シールド	실드	
+item	6	ワンド	완드	
+item	7	クロス	크로스	
+item	8	オーブ	오브	
+item	9	ネックレス	네클리스	
+magic	0			원본이 문자열이 아니다 — 건드리지 않는다
+magic	1	マジックアロー	매직애로우	
+magic	2	ファイアボール	파이어볼	
+magic	3	ブリザード	블리자드	
+magic	4	ライトニング	라이트닝	
+magic	5	サンダー	썬더	
+magic	6	アースクエイク	어스퀘이크	
+magic	7	トルネード	토네이도	
+magic	8	ファイアボール	파이어볼	
+magic	9	ヒーリング 1	힐링 1	
+magic	10	ヒーリング 2	힐링 2	
+magic	11	ヒーリング 3	힐링 3	
+magic	12	スリープ	슬립	
+magic	13	コンフューズ	컨퓨즈	

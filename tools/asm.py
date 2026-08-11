@@ -200,24 +200,91 @@ def build_uploader_a1(kfont: int, slot_base: int, target: int) -> bytes:
     return bytes(body)
 
 
-def _glyph_loop(kfont: int, tile_base: int) -> bytes:
-    """a0 = 글리프 ID 목록(7비트 두 바이트 x N), d7 = N-1 을 전제로 VRAM 에 올린다.
-    d0..d2 / a2 / a3 를 스크래치로 쓴다."""
+def _glyph_loop(kfont: int, tile_base: int | None = 0, areg: int = 0) -> bytes:
+    """a{areg} = 글리프 ID 목록(7비트 두 바이트 x N), d7 = N-1 을 전제로 VRAM 에 올린다.
+    d0..d2 / a2 / a3 를 스크래치로 쓴다. tile_base=None 이면 d1 이 이미 VRAM 주소다."""
     body = bytearray()
-    body += w(0x323C) + w(tile_base * 32)         # move.w #tile*32, d1
+    if tile_base is not None:
+        body += w(0x323C) + w(tile_base * 32)     # move.w #tile*32, d1
     body += lea_abs(VDP_DATA, 2)                  # lea (C00000).l, a2
     loop_at = len(body)
     body += vdp_set_write(0, 1)                   # d0 스크래치, d1 = VRAM 주소
     body += w(0x7400)                             # moveq #0, d2
-    body += w(0x1418)                             # move.b (a0)+, d2   상위 7비트
+    body += w(0x1418 | areg)                      # move.b (aN)+, d2   상위 7비트
     body += w(0xEF4A)                             # lsl.w #7, d2
-    body += w(0x8418)                             # or.b  (a0)+, d2    하위 7비트
+    body += w(0x8418 | areg)                      # or.b  (aN)+, d2    하위 7비트
     body += w(0xE58A) + w(0xE58A) + w(0xE38A)     # lsl.l #2,#2,#1 -> x32
     body += lea_abs(kfont, 3)                     # lea KFONT, a3
     body += w(0xD7C2)                             # adda.l d2, a3
     body += w(0x249B) * 8                         # move.l (a3)+, (a2)  32바이트
     body += w(0x0641) + w(0x0020)                 # addi.w #32, d1
     body += w(0x51CF) + w((loop_at - (len(body) + 2)) & 0xFFFF)   # dbra d7, loop
+    return bytes(body)
+
+
+UI_MARKER = 0x01
+
+
+def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
+                      table_at: int = 0x62BC) -> bytes:
+    """UI 문자열 업로더. `0x5FD4` 의 `lea $62BC.l, a2` 자리를 그대로 대신한다.
+
+    UI 텍스트는 예외 없이 `lea <문자열>, a1` + `jsr $5F60` 으로 그려진다. 그래서
+    **문자열이 자기 글리프를 들고 다니게** 만들면 그리기 지점마다 훅을 걸 필요가
+    없다. `$5F60` 의 문자열 루프 직전 한 곳이면 전부 걸린다.
+
+    문자열 앞머리:  `[0x01][k]`  — k 번째 글리프 기록을 올리라는 뜻
+    글리프 기록:    `[타일][N][ID x N]`  (uitbl + k*stride, ID 는 7비트 두 바이트)
+
+    두 바이트만 붙이는 간접 방식인 이유: 클래스명 같은 표는 `lsl.w #4` 로 색인해
+    **엔트리가 16바이트로 고정**이다. 글리프 목록을 문자열에 직접 담으면 넘친다.
+
+    마커로 `0x01` 을 쓴 이유: 본문 코드(0x7F..0xA0/0xE0..0xFD)·이름 코드(0x0E..0x13)
+    ·ASCII·줄바꿈(0x0D)과 겹치지 않는 값이어야 한다. 대사 본문 문자열도 이 훅을
+    지나가는데(렌더러가 같다) 첫 바이트가 본문 코드라 절대 0x01 이 아니다.
+
+    a1 은 movem 에서 **빼둔다**. 헤더를 지나간 만큼 전진이 그대로 남아야 하고,
+    그래야 `$5F60` 의 루프가 본문부터 읽는다.
+
+    `k` 는 범위를 검사한다. 아직 번역하지 않은 원본 문자열이 우연히 `0x01` 로
+    시작하면 엉뚱한 기록을 읽어 VRAM 을 망가뜨리기 때문이다. 범위 밖이면 a1 을
+    건드리지 않고 나가므로 원본과 완전히 같게 동작한다.
+    """
+    body = bytearray()
+    body += w(0x0C11) + w(UI_MARKER)              # cmpi.b #$01, (a1)
+    body += w(0x6600) + w(0x0000)                 # bne.w .plain
+    bne_at = len(body) - 2
+
+    body += w(0x48E7) + w(0xFFBE)                 # movem.l d0-d7/a0/a2-a6, -(a7)
+    body += w(0x7000)                             # moveq #0, d0
+    body += w(0x1029) + w(0x0001)                 # move.b 1(a1), d0    k
+    body += w(0x0C40) + w(nrec)                   # cmpi.w #nrec, d0
+    body += w(0x6400) + w(0x0000)                 # bcc.w .restore     범위 밖
+    bcc_at = len(body) - 2
+    body += w(0x5489)                             # addq.l #2, a1      마커 + k
+    body += w(0x40E7)                             # move.w sr, -(a7)
+    body += w(0x46FC) + w(0x2700)                 # move.w #$2700, sr
+    body += w(0xC0FC) + w(stride)                 # mulu.w #stride, d0
+    body += lea_abs(uitbl, 0)                     # lea UITBL, a0
+    body += w(0xD0C0)                             # adda.w d0, a0
+    body += w(0x7200)                             # moveq #0, d1
+    body += w(0x1218)                             # move.b (a0)+, d1    타일 번호
+    body += w(0xEB49)                             # lsl.w #5, d1        x32 = VRAM 주소
+    body += w(0x7E00)                             # moveq #0, d7
+    body += w(0x1E18)                             # move.b (a0)+, d7    N
+    body += w(0x6700) + w(0x0000)                 # beq.w .done
+    beq_at = len(body) - 2
+    body += w(0x5347)                             # subq.w #1, d7
+    body += _glyph_loop(kfont, None, areg=0)
+    body[beq_at:beq_at + 2] = w(len(body) - (beq_at - 2) - 2)       # .done
+    body += w(0x46DF)                             # move.w (a7)+, sr
+
+    body[bcc_at:bcc_at + 2] = w(len(body) - (bcc_at - 2) - 2)       # .restore
+    body += w(0x4CDF) + w(0x7DFF)                 # movem.l (a7)+, d0-d7/a0/a2-a6
+
+    body[bne_at:bne_at + 2] = w(len(body) - (bne_at - 2) - 2)       # .plain
+    body += lea_abs(table_at, 2)                  # lea $62BC.l, a2   훔친 명령
+    body += w(0x4E75)                             # rts
     return bytes(body)
 
 

@@ -28,7 +28,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from asm import build_uploader_labels, build_uploader_msg  # noqa: E402
+from asm import UI_MARKER, build_uploader_labels, build_uploader_msg  # noqa: E402
+from asm import build_uploader_ui  # noqa: E402
 from chain import parse_chain  # noqa: E402
 from events import e82c_sites  # noqa: E402
 from script import decode  # noqa: E402
@@ -42,19 +43,30 @@ LABEL_MAP = Path("font/dunggeunmo/font-6883cc1477b4cbfa_glyph_map.json")
 KO_TSV = Path("translation/ko.tsv")
 NAMES_TSV = Path("translation/names.tsv")
 DIALOGUE_TSV = Path("translation/dialogue.tsv")
+UI_TSV = Path("translation/ui.tsv")
 
 ROM_SIZE = 0x100000
-UPLOADER_AT, UPLOADER2_AT = 0x80000, 0x80200
+UPLOADER_AT, UPLOADER2_AT, UI_UPLOADER_AT = 0x80000, 0x80200, 0x80700
 LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
-KFONT_AT, TEXT_AT, CHAIN_AT = 0x82000, 0xA0000, 0xB0000
+UISTR_AT, UITBL_AT = 0x82000, 0x83000
+KFONT_AT, TEXT_AT, CHAIN_AT = 0x88000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
 MSG_HOOK, NAMEPTR_IMM, NAMETBL_ORIG = 0x157C8, 0x157D8, 0x2AE64
+UI_HOOK = 0x5FD4          # lea $62BC.l, a2 — 문자열 루프 직전
 
 SLOT_BASE = 128
 CODES = list(range(0x7F, 0xA1)) + list(range(0xE0, 0xFE))   # 64개
 NAME_BASE, NAME_CELLS = 192, 6
 NAME_CODES = list(range(0x0E, 0x0E + NAME_CELLS))
+# UI 전용 저바이트 코드 23개 -> 타일 198.. (클래스명 같은 '한 번에 하나' 필드용)
+UI_CODES = list(range(0x02, 0x0D)) + list(range(0x14, 0x20))
+UI_BASE, UI_STRIDE, UI_REC = 198, 16, 128   # 기록 128B = 공유 어휘 63자까지
+UI_FIELDS = {                     # 필드 -> (원본 표, 엔트리 수, 칸 수, 배정 방식)
+    "magic": (0x2B9AC, 14, 8, "shared"),
+    "item":  (0x2B8E4, 10, 8, "shared"),
+    "class": (0x2B334, 91, 8, "positional"),
+}
 BG, INK, OUTLINE = 13, 15, 14
 
 TABLES = {"stage": 0x38A38, "prologue": 0x38BF2, "cond": 0x3962E}
@@ -261,6 +273,103 @@ def build_names(g: Glyphs) -> tuple[bytes, bytes, int]:
     return bytes(strs), bytes(idtbl), n
 
 
+# ------------------------------------------------------------------ UI 텍스트
+def lea_sites(rom: bytes, addr: int) -> list[int]:
+    """`lea addr.l, aN` 의 즉치 위치들. UI 문자열표를 우리 것으로 돌리는 데 쓴다."""
+    pat, out = addr.to_bytes(4, "big"), []
+    for p in range(0, len(rom) - 6, 2):
+        if rom[p] & 0xF1 == 0x41 and rom[p + 1] == 0xF9 and rom[p + 2:p + 6] == pat:
+            out.append(p + 2)
+    return out
+
+
+def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[str]]:
+    """UI 문자열표를 우리 것으로 바꾼다. 반환값은 (문자열표, 글리프 기록표, 로그).
+
+    엔트리가 `lsl.w #4` 로 색인돼 **16바이트 고정**이라 글리프 목록을 문자열에 담을
+    수 없다. 그래서 `[0x01][k]` 두 바이트만 붙이고 글리프는 별도 기록표에 둔다.
+
+    두 가지 배정 방식을 쓴다 — 갈리는 기준은 **한 화면에 몇 개가 보이는가**다.
+
+      positional  한 번에 하나만 보이는 표(클래스명). 엔트리마다 기록을 따로 갖고
+                  k 번째 칸은 항상 코드 `UI_CODES[k]`. 칸 수만큼만 타일을 쓴다.
+      shared      여러 줄이 동시에 보이는 표(마법·아이템 — 목록을 루프로 그린다).
+                  표 전체의 **어휘 합집합**을 한 기록에 담고 모든 엔트리가 그것을
+                  공유한다. 줄마다 다시 올려도 결과가 같으므로 순서에 안 깨진다.
+
+    번역이 없는 엔트리는 원본 16바이트를 그대로 복사한다. 우리 표가 원본을 완전히
+    대신하므로 빈 칸을 남기면 그 엔트리가 사라진다.
+    """
+    ui: dict[tuple[str, int], str] = {}
+    for ln in UI_TSV.read_text().rstrip("\n").split("\n")[1:]:
+        c = ln.split("\t")
+        if len(c) >= 4 and c[3]:
+            ui[(c[0], int(c[1]))] = c[3]
+
+    recs: list[tuple[int, list[str]]] = []      # (타일 번호, 글리프 문자들)
+    strs, log, body_off, at = bytearray(), [], 0, {}
+    for field, (table, n, cells, mode) in UI_FIELDS.items():
+        at[field] = UISTR_AT + len(strs)
+        done = 0
+        if mode == "shared":
+            vocab: list[str] = []
+            for k in range(n):
+                for ch in ui.get((field, k), ""):
+                    if ch not in ASCII_OK and ch not in vocab:
+                        vocab.append(ch)
+            if body_off + len(vocab) > len(CODES):
+                raise SystemExit(f"{field}: 어휘 {len(vocab)}자가 본문 코드에 안 들어간다")
+            cmap = {ch: CODES[body_off + i] for i, ch in enumerate(vocab)}
+            shared_k = len(recs)
+            recs.append((SLOT_BASE + body_off, vocab))
+            body_off += len(vocab)
+        for k in range(n):
+            ko = ui.get((field, k))
+            if not ko:
+                strs += src[table + k * UI_STRIDE:table + (k + 1) * UI_STRIDE]
+                continue
+            if len(ko) > cells:
+                raise SystemExit(f"{field}[{k}] {ko!r} 이 {cells}칸을 넘는다")
+            if mode == "shared":
+                rk, code_of = shared_k, cmap
+            else:
+                chars = [ch for ch in ko if ch not in ASCII_OK]
+                if len(chars) > len(UI_CODES):
+                    raise SystemExit(f"{field}[{k}] {ko!r} 이 이름칸 {len(UI_CODES)}개를 넘는다")
+                rk, code_of = len(recs), {ch: UI_CODES[i] for i, ch in enumerate(chars)}
+                recs.append((UI_BASE, chars))
+            entry = bytearray([UI_MARKER, rk])
+            for i, ch in enumerate(ko):
+                entry.append(ord(ch) if ch in ASCII_OK else code_of[ch])
+            entry += b" " * (cells - len(ko)) + b"\xff"     # 남은 칸은 공백으로 지운다
+            if len(entry) > UI_STRIDE:
+                raise SystemExit(f"{field}[{k}] 엔트리가 {UI_STRIDE}바이트를 넘는다")
+            strs += entry.ljust(UI_STRIDE, b"\x00")
+            done += 1
+        sites = lea_sites(src, table)
+        if not sites:
+            raise SystemExit(f"{field}: 표 {table:06X} 를 싣는 lea 를 못 찾았다")
+        for p in sites:
+            rom[p:p + 4] = at[field].to_bytes(4, "big")
+        log.append(f"  {field:6s} {table:06X} -> {at[field]:06X}  {done}/{n} 번역 / "
+                   f"lea {len(sites)}곳 / 기록 {len(recs)}개")
+
+    for _, chars in recs:
+        for ch in chars:
+            g.add(ch)
+    tbl = bytearray()
+    for base, chars in recs:
+        rec = bytearray([base, len(chars)])
+        for ch in chars:
+            rec += bytes([g.gid[ch] >> 7, g.gid[ch] & 0x7F])
+        if len(rec) > UI_REC:
+            raise SystemExit(f"글리프 기록이 {UI_REC}바이트를 넘는다 ({len(chars)}자)")
+        tbl += rec.ljust(UI_REC, b"\x00")
+    log.append(f"  본문 슬롯 {body_off}/{len(CODES)} 사용 (공유 어휘) / "
+               f"이름칸 코드 {len(UI_CODES)}개는 클래스명용")
+    return bytes(strs), bytes(tbl), log
+
+
 # ------------------------------------------------------------------ 본편 대사
 def build_chains(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, list[str]]:
     """번역된 대화 체인을 새 자리에 다시 쓰고 앵커 즉치를 그쪽으로 돌린다.
@@ -348,9 +457,12 @@ def main() -> None:
 
     namestr, nameids, name_n = build_names(g)
     chains, chain_log = build_chains(rom, src, g)
+    uistr, uitbl, ui_log = build_ui(rom, src, g)
 
     place(rom, NAMESTR_AT, namestr, "이름 문자열표")
     place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")
+    place(rom, UISTR_AT, uistr, "UI 문자열표")
+    place(rom, UITBL_AT, uitbl, "UI 글리프기록표")
     place(rom, CHAIN_AT, chains, "대사 체인")
     place(rom, LABEL_AT, make_labels(), "승리/패배 라벨")
     place(rom, KFONT_AT, g.table(), "글리프 테이블")   # 글리프는 모두 모인 뒤에 굽는다
@@ -377,11 +489,22 @@ def main() -> None:
         f"{NAMEPTR_IMM:06X} 가 이름표 즉치 아님"
     rom[NAMEPTR_IMM:NAMEPTR_IMM + 4] = NAMESTR_AT.to_bytes(4, "big")
 
+    # UI 훅 — lea $62BC.l, a2 (6B) 자리를 jsr (6B) 로. 문자열이 자기 글리프를 들고
+    # 오므로 그리기 지점마다 훅을 걸 필요가 없다.
+    want3 = b"\x45\xf9" + TABLE_AT.to_bytes(4, "big")
+    assert rom[UI_HOOK:UI_HOOK + 6] == want3, f"{UI_HOOK:06X} 가 lea ${TABLE_AT:X},a2 아님"
+    code3 = build_uploader_ui(kfont=KFONT_AT, uitbl=UITBL_AT, nrec=len(uitbl) // UI_REC,
+                              stride=UI_REC, table_at=TABLE_AT)
+    place(rom, UI_UPLOADER_AT, code3, "UI 업로더")
+    rom[UI_HOOK:UI_HOOK + 6] = b"\x4e\xb9" + UI_UPLOADER_AT.to_bytes(4, "big")
+
     # 코드 -> 타일 매핑은 전 화면 공통이므로 한 번만
     for i, c in enumerate(CODES):
         rom[TABLE_AT + c] = SLOT_BASE + i
     for i, c in enumerate(NAME_CODES):
         rom[TABLE_AT + c] = NAME_BASE + i
+    for i, c in enumerate(UI_CODES):
+        rom[TABLE_AT + c] = UI_BASE + i
 
     # 프롤로그 화면 — 한 화면 세 문자열이 슬롯을 공유한다
     at = TEXT_AT
@@ -407,6 +530,8 @@ def main() -> None:
 
     out = Path("work/korom_all.md")
     out.write_bytes(rom)
+    print("\nUI 문자열표")
+    print("\n".join(ui_log))
     print("\n대사 체인")
     print("\n".join(chain_log))
     print(f"\n전역 글리프 {len(g.gid)}개 / 이름 {name_n}개")
