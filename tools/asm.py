@@ -200,6 +200,95 @@ def build_uploader_a1(kfont: int, slot_base: int, target: int) -> bytes:
     return bytes(body)
 
 
+def _glyph_loop(kfont: int, tile_base: int) -> bytes:
+    """a0 = 글리프 ID 목록(7비트 두 바이트 x N), d7 = N-1 을 전제로 VRAM 에 올린다.
+    d0..d2 / a2 / a3 를 스크래치로 쓴다."""
+    body = bytearray()
+    body += w(0x323C) + w(tile_base * 32)         # move.w #tile*32, d1
+    body += lea_abs(VDP_DATA, 2)                  # lea (C00000).l, a2
+    loop_at = len(body)
+    body += vdp_set_write(0, 1)                   # d0 스크래치, d1 = VRAM 주소
+    body += w(0x7400)                             # moveq #0, d2
+    body += w(0x1418)                             # move.b (a0)+, d2   상위 7비트
+    body += w(0xEF4A)                             # lsl.w #7, d2
+    body += w(0x8418)                             # or.b  (a0)+, d2    하위 7비트
+    body += w(0xE58A) + w(0xE58A) + w(0xE38A)     # lsl.l #2,#2,#1 -> x32
+    body += lea_abs(kfont, 3)                     # lea KFONT, a3
+    body += w(0xD7C2)                             # adda.l d2, a3
+    body += w(0x249B) * 8                         # move.l (a3)+, (a2)  32바이트
+    body += w(0x0641) + w(0x0020)                 # addi.w #32, d1
+    body += w(0x51CF) + w((loop_at - (len(body) + 2)) & 0xFFFF)   # dbra d7, loop
+    return bytes(body)
+
+
+def build_uploader_msg(kfont: int, body_base: int, name_base: int,
+                       name_ids: int, name_n: int,
+                       p_work: int = 0xFFFFE818, p_name: int = 0xFFFFE82A) -> bytes:
+    """본편 대사용 업로더. `0x157C8` 의 `move.l a1, $E818` 자리를 그대로 대신한다.
+
+    이름판 렌더러 `0x1579A` 안의 그 지점이 유일한 훅이면 되는 이유:
+      - a1 이 이미 **본문 문자열**을 가리킨다 (0x157BA 가 $E824 에 따라 앞 문자열을
+        건너뛴 뒤). 본문이 str1 인지 str2 인지는 런타임 값이라 알 수 없지만,
+        여기서는 이미 정해져 있다.
+      - 이름판(0x157EC)과 본문(0x15650) 두 그리기보다 **먼저** 실행된다. 네임테이블은
+        타일 번호만 들고 있으니 그리기 전에 픽셀을 올려야 한다.
+      - 메시지마다 창을 다시 열므로(0x154FE) 메시지마다 한 번 실행된다.
+
+    이름 글리프는 **마커와 무관하게 항상** 올린다. 이름 문자열표(0x157D8 즉치)를
+    우리 것으로 바꿔 두므로, 아직 번역하지 않은 일본어 메시지도 이름판은 한글로
+    나와야 하기 때문이다.
+    """
+    body = bytearray()
+    body += w(0x48E7) + w(0xFFF0)                 # movem.l d0-d7/a0-a3, -(a7)
+    body += w(0x40E7)                             # move.w sr, -(a7)
+    body += w(0x46FC) + w(0x2700)                 # move.w #$2700, sr
+
+    # ---- 이름 글리프: $E82A(이름 인덱스) -> 우리 ID 표 -> 타일 name_base.. ----
+    body += w(0x7000)                             # moveq #0, d0
+    body += w(0x3039) + l(p_name)                 # move.w (E82A).l, d0
+    body += w(0x0C40) + w(name_n)                 # cmpi.w #name_n, d0
+    body += w(0x6400) + w(0x0000)                 # bcc.w .noname
+    bcc_at = len(body) - 2
+    body += w(0xE940)                             # lsl.w #4, d0        16B/엔트리
+    body += lea_abs(name_ids, 0)                  # lea NAME_IDS, a0
+    body += w(0xD0C0)                             # adda.w d0, a0
+    body += w(0x7E00)                             # moveq #0, d7
+    body += w(0x1E18)                             # move.b (a0)+, d7    N
+    body += w(0x6700) + w(0x0000)                 # beq.w .noname
+    beq_name_at = len(body) - 2
+    body += w(0x5347)                             # subq.w #1, d7
+    body += _glyph_loop(kfont, name_base)
+    end = len(body)
+    body[bcc_at:bcc_at + 2] = w(end - (bcc_at - 2) - 2)
+    body[beq_name_at:beq_name_at + 2] = w(end - (beq_name_at - 2) - 2)
+
+    # ---- 본문 글리프: 헤더 [0xFE][N][ID x N] 가 있을 때만 ----
+    body += w(0x0C11) + w(MARKER)                 # cmpi.b #$FE, (a1)
+    body += w(0x6600) + w(0x0000)                 # bne.w .plain
+    bne_at = len(body) - 2
+    body += w(0x2049)                             # movea.l a1, a0
+    body += w(0x5288)                             # addq.l #1, a0       마커 건너뛰기
+    body += w(0x7E00)                             # moveq #0, d7
+    body += w(0x1E18)                             # move.b (a0)+, d7    N
+    body += w(0x6700) + w(0x0000)                 # beq.w .store
+    beq_body_at = len(body) - 2
+    body += w(0x5347)                             # subq.w #1, d7
+    body += _glyph_loop(kfont, body_base)
+    body[beq_body_at:beq_body_at + 2] = w(len(body) - (beq_body_at - 2) - 2)
+    body += move_l_a_abs(0, p_work)               # move.l a0, (E818).l  헤더 뒤
+    body += w(0x6000) + w(0x0000)                 # bra.w .done
+    bra_at = len(body) - 2
+
+    body[bne_at:bne_at + 2] = w(len(body) - (bne_at - 2) - 2)      # .plain
+    body += move_l_a_abs(1, p_work)               # move.l a1, (E818).l
+
+    body[bra_at:bra_at + 2] = w(len(body) - (bra_at - 2) - 2)      # .done
+    body += w(0x46DF)                             # move.w (a7)+, sr
+    body += w(0x4CDF) + w(0x0FFF)                 # movem.l (a7)+, d0-d7/a0-a3
+    body += w(0x4E75)                             # rts
+    return bytes(body)
+
+
 def build_uploader_labels(kfont: int, slot_base: int, target: int,
                           label_src: int, label_dst: int, label_tiles: int) -> bytes:
     """글리프 업로드에 이어 고정 타일 블록(승리/패배 라벨)도 올린다.

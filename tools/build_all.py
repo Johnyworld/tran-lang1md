@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
-"""20스테이지 프롤로그 화면 전체를 한글로 빌드한다.
+"""한글화 롬 빌드 — 프롤로그 화면 20개 + 본편 대사 + 이름판.
 
-build_screen.py 를 20스테이지로 일반화한 것. 핵심 설계 변경은 **글리프 테이블을
-전역으로** 둔 것이다.
+글리프 테이블은 **전역**이다. 롬에 쓰이는 모든 한글 글리프를 한 번 모아 ID 를
+부여하고, 각 문자열은 그 ID 목록을 헤더로 들고 다닌다. 업로더가 헤더를 읽어
+VRAM 슬롯을 채운다. 화면이 바뀔 때 달라지는 것은 타일의 **내용**뿐이다.
 
-  - 전역 글리프 테이블: 20스테이지에 쓰이는 모든 글리프를 모아 ID 를 부여
-  - 스테이지별 헤더: 그 화면이 쓰는 글리프의 **전역 ID** 목록 (최대 64개)
-    ID 는 7비트 두 바이트로 담아 0xFF 가 섞이지 않게 한다
-  - `$62BC`: 코드 -> 타일(SLOT_BASE+i) 매핑은 모든 스테이지가 같으므로 한 번만 설정
+타일·코드 배정
+--------------
+```
+타일 128..191  본문 슬롯 64개   코드 0x7F..0xA0 / 0xE0..0xFD
+타일 192..197  이름판 슬롯 6개  코드 0x0E..0x13 (위치 고정)
+```
+`$62BC` 는 코드 -> 타일 표이고 렌더러 `$5F60` 이 이것으로 타일을 고른다.
+프롤로그와 본편 대사가 같은 렌더러를 쓰므로 배정도 하나로 통한다.
 
-덕분에 업로더도 하나, 테이블도 하나면 된다. 화면이 바뀔 때 달라지는 것은
-VRAM 타일의 **내용**뿐이다.
-
-한 화면은 세 문자열을 그린다 (렌더러 0x18CE8). 첫 draw(0x18D12)에 훅을 걸어
-그 화면 세 문자열 글리프의 합집합을 한 번에 올린다. 네임테이블은 타일 번호만
-들고 있어 나중에 픽셀을 바꾸면 먼저 그려진 글자 모양까지 바뀌므로, 한 화면에
-동시에 보이는 문자열은 하나의 타일 배정을 공유해야 한다.
+훅 두 군데
+----------
+```
+0x18D12  프롤로그 렌더러의 첫 draw   jsr $5F60 -> jsr 업로더(본문+라벨)
+0x157C8  이름판 렌더러의 $E818 저장  move.l a1,$E818 -> jsr 업로더(본문+이름)
+0x157D8  이름 문자열표 즉치          0x2AE64 -> 우리 표
+```
+`0x157C8` 이 대사에서 유일한 훅으로 충분한 이유는 `asm.build_uploader_msg` 참고.
 """
 import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from asm import build_uploader_labels  # noqa: E402
+from asm import build_uploader_labels, build_uploader_msg  # noqa: E402
+from chain import parse_chain  # noqa: E402
 
 SRC = Path("/Users/rotein/Downloads/Langrisser.md")
 VRAM = Path("work/Mega Drive/Langrisser-vdp-vram-20260811-151039.bin")
@@ -31,12 +38,22 @@ G7_MAP = Path("font/galmuri7/font-007242d37349daf3_glyph_map.json")
 LABEL_BIN = Path("font/dunggeunmo/font-6883cc1477b4cbfa.bin")
 LABEL_MAP = Path("font/dunggeunmo/font-6883cc1477b4cbfa_glyph_map.json")
 KO_TSV = Path("translation/ko.tsv")
+NAMES_TSV = Path("translation/names.tsv")
+DIALOGUE_TSV = Path("translation/dialogue.tsv")
+REFS = Path("work/refs.json")
 
 ROM_SIZE = 0x100000
-UPLOADER_AT, LABEL_AT, KFONT_AT, TEXT_AT = 0x80000, 0x80400, 0x81000, 0xA0000
+UPLOADER_AT, UPLOADER2_AT = 0x80000, 0x80200
+LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
+KFONT_AT, TEXT_AT, CHAIN_AT = 0x82000, 0xA0000, 0xB0000
+
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
+MSG_HOOK, NAMEPTR_IMM, NAMETBL_ORIG = 0x157C8, 0x157D8, 0x2AE64
+
 SLOT_BASE = 128
 CODES = list(range(0x7F, 0xA1)) + list(range(0xE0, 0xFE))   # 64개
+NAME_BASE, NAME_CELLS = 192, 6
+NAME_CODES = list(range(0x0E, 0x0E + NAME_CELLS))
 BG, INK, OUTLINE = 13, 15, 14
 
 TABLES = {"stage": 0x38A38, "prologue": 0x38BF2, "cond": 0x3962E}
@@ -45,6 +62,25 @@ LABEL_DST, LABEL_TILES, LABEL_Y = 522 * 32, 20, 4
 LABEL_TOP, LABEL_BOTTOM = "승리", "패배"
 FROM_VRAM = {"。": 129, "「": 130, "」": 131, "、": 132, "・": 133}  # 게임 폰트의 가나 블록
 ASCII_OK = set(" 1234567890.,()-!?")   # 게임 ASCII 폰트로 그린다
+
+
+PLACED: list[tuple[int, int, str]] = []
+
+
+def place(rom: bytearray, at: int, data: bytes, label: str) -> int:
+    """빈 공간에 데이터를 놓고 구간을 등록한다. 겹치면 즉시 죽는다.
+
+    이름 ID 표가 글리프 테이블을 덮어써서 한 번 당했다. 주소를 손으로 관리하는
+    동안은 겹침을 눈으로 확인할 수 없으니 기계가 확인한다.
+    """
+    end = at + len(data)
+    for s, e, other in PLACED:
+        if at < e and s < end:
+            raise SystemExit(f"{label} [{at:06X}..{end:06X}) 가 "
+                             f"{other} [{s:06X}..{e:06X}) 와 겹친다")
+    PLACED.append((at, end, label))
+    rom[at:end] = data
+    return end
 
 
 def to_4bpp(g8: bytes) -> bytes:
@@ -83,104 +119,253 @@ def make_labels() -> bytes:
     return bytes(out)
 
 
-def load_ko() -> dict[str, str]:
+def load_tsv(path: Path, key: int, val: int, ncol: int) -> dict[str, str]:
     out = {}
-    for ln in KO_TSV.read_text().rstrip("\n").split("\n")[1:]:
+    for ln in path.read_text().rstrip("\n").split("\n")[1:]:
         c = ln.split("\t")
-        if len(c) >= 3 and c[2]:
-            out[c[0]] = c[2].replace("\\n", "\n")
+        if len(c) >= ncol and c[val]:
+            out[c[key]] = c[val].replace("\\n", "\n")
     return out
 
 
+def load_dialogue() -> dict[str, list[str | None]]:
+    """앵커 -> 메시지 순서대로의 한국어 (빈 칸은 None = 원문 유지)."""
+    out: dict[str, dict[int, str]] = {}
+    for ln in DIALOGUE_TSV.read_text().rstrip("\n").split("\n")[1:]:
+        c = ln.split("\t")
+        if len(c) >= 4 and c[3]:
+            out.setdefault(c[0], {})[int(c[1])] = c[3].replace("\\n", "\n")
+    return {a: [d.get(i) for i in range(max(d) + 1)] for a, d in out.items()}
+
+
+class Glyphs:
+    """전역 글리프 테이블. 문자 -> ID, ID 는 7비트 두 바이트로 담긴다."""
+
+    def __init__(self, vram: bytes) -> None:
+        self.gid: dict[str, int] = {}
+        self.vram = vram
+        self.g7 = G7_BIN.read_bytes()
+        self.g7map = json.loads(G7_MAP.read_text())
+
+    def add(self, text: str) -> None:
+        for ch in text:
+            if ch not in ASCII_OK and ch != "\n" and ch not in self.gid:
+                self.gid[ch] = len(self.gid)
+
+    def table(self) -> bytes:
+        out = bytearray()
+        for ch in self.gid:
+            if ch in FROM_VRAM:
+                t = FROM_VRAM[ch]
+                out += self.vram[t * 32:(t + 1) * 32]
+            elif ch in self.g7map:
+                o = self.g7map[ch] * 8
+                out += to_4bpp(self.g7[o:o + 8])
+            else:
+                raise SystemExit(f"글리프 없음: {ch!r}")
+        return bytes(out)
+
+    def header(self, slots: dict[str, int]) -> bytes:
+        """[0xFE][N][ID x N] — ID = (b0 << 7) | b1.
+
+        16비트로 담으면 ID 255 가 0x00FF 처럼 0xFF 를 포함하는데, 게임은 메시지를
+        건너뛸 때 0xFF 를 바이트 단위로 훑으므로(0x15470, 0x157BA) 헤더 중간에서
+        멈춘다. 두 바이트 모두 0x80 미만이면 그 사고가 원천적으로 없다.
+        """
+        out = bytearray([0xFE, len(slots)])
+        for ch in slots:
+            g = self.gid[ch]
+            if g > 0x3FFF:
+                raise SystemExit(f"글리프 ID {g} 가 14비트를 넘는다")
+            out += bytes([g >> 7, g & 0x7F])
+        return bytes(out)
+
+
+def assign(texts: list[str]) -> dict[str, int]:
+    """한 화면(또는 한 메시지)에 동시에 보이는 문자들에게 슬롯을 나눠준다.
+
+    네임테이블은 타일 *번호* 만 들고 있다. 나중에 픽셀을 바꾸면 먼저 그려진
+    글자의 모양까지 바뀌므로, 같이 보이는 문자열은 배정을 공유해야 한다.
+    """
+    slots: dict[str, int] = {}
+    for t in texts:
+        for ch in t:
+            if ch not in ASCII_OK and ch != "\n" and ch not in slots:
+                slots[ch] = len(slots)
+    return slots
+
+
+def encode(text: str, slots: dict[str, int]) -> bytes:
+    out = bytearray()
+    for ch in text:
+        if ch == "\n":
+            out += b"\x0d\x0d"          # 시각적 한 줄 = 0x0D 두 개
+        elif ch in ASCII_OK:
+            out.append(ord(ch))
+        else:
+            out.append(CODES[slots[ch]])
+    return bytes(out)
+
+
+# ------------------------------------------------------------------ 이름판
+def build_names(g: Glyphs) -> tuple[bytes, bytes, int]:
+    """이름 문자열표 + 글리프 ID 표. 둘 다 원본과 같은 16B/엔트리.
+
+    원본 표(0x2AE64, 16B x 78)를 건드리지 않는 이유: 같은 표를 유닛 상태창 등
+    다른 UI 도 읽는다. 대신 이름판 렌더러가 보는 **포인터만** 우리 표로 돌린다.
+
+    문자열은 **위치 코드**다 — k 번째 한글 칸은 항상 코드 `0x0E+k`. 업로더가
+    그 이름의 글리프를 타일 192+k 에 올리므로 표에는 자리만 적으면 된다.
+    """
+    ko = load_tsv(NAMES_TSV, 0, 2, 3)
+    n = 78
+    strs, idtbl = bytearray(), bytearray()
+    for k in range(n):
+        name = ko.get(str(k), "")
+        cells, ids = bytearray(), []
+        for ch in name:
+            if ch in ASCII_OK:
+                cells.append(ord(ch))
+            else:
+                if len(ids) >= NAME_CELLS:
+                    raise SystemExit(f"이름 {k} {name!r} 이 {NAME_CELLS}칸을 넘는다")
+                cells.append(NAME_CODES[len(ids)])
+                g.add(ch)
+                ids.append(g.gid[ch])
+        if len(cells) > NAME_CELLS:
+            raise SystemExit(f"이름 {k} {name!r} 이 {NAME_CELLS}칸을 넘는다")
+        cells += b" " * (NAME_CELLS - len(cells)) + b"\xff"   # 남은 칸은 공백으로 지운다
+        rec = bytearray([len(ids)])
+        for gid in ids:
+            rec += bytes([gid >> 7, gid & 0x7F])
+        strs += cells.ljust(16, b"\x00")
+        idtbl += rec.ljust(16, b"\x00")
+    return bytes(strs), bytes(idtbl), n
+
+
+# ------------------------------------------------------------------ 본편 대사
+def build_chains(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, list[str]]:
+    """번역된 대화 체인을 새 자리에 다시 쓰고 앵커 즉치를 그쪽으로 돌린다.
+
+    체인 문법은 chain.py 참고. 메시지는 문자열 두 칸을 갖고 그중 하나만 본문인데
+    (선택은 런타임 $E824) **원본의 모양을 그대로 보존**하면 판단이 필요없다 —
+    비어 있던 칸은 비우고, 본문이던 칸에 번역을 넣는다.
+    """
+    refs = json.loads(REFS.read_text())
+    ko = load_dialogue()
+    blob, log = bytearray(), []
+    for anchor_s, kos in sorted(ko.items()):
+        anchor = int(anchor_s, 16)
+        msgs = parse_chain(src, anchor)
+        if len(kos) > len(msgs):
+            raise SystemExit(f"{anchor_s}: 번역 {len(kos)}개 > 메시지 {len(msgs)}개")
+
+        sites = [r for r in refs if int(r["target"], 16) == anchor]
+        if not sites:
+            raise SystemExit(f"{anchor_s}: 이 앵커를 싣는 즉치를 못 찾았다")
+
+        if len(blob) & 1:
+            blob.append(0x00)
+        start, over = CHAIN_AT + len(blob), []
+        for i, m in enumerate(msgs):
+            text = kos[i] if i < len(kos) else None
+            if text is None:
+                s1, s2 = m["s1"], m["s2"]          # 원문 그대로
+            else:
+                slots = assign([text])
+                if len(slots) > len(CODES):
+                    over.append((i, len(slots)))
+                g.add(text)
+                enc = g.header(slots) + encode(text, slots)
+                s1 = enc if m["s1"] else b""
+                s2 = enc if m["s2"] else b""
+                if not s1 and not s2:
+                    raise SystemExit(f"{anchor_s}[{i}]: 원본에 본문 칸이 없다")
+            blob += m["w"].to_bytes(2, "big") + s1 + b"\xff" + s2 + b"\xff"
+            if len(blob) & 1:
+                blob.append(0x00)    # 짝수 정렬 — 메시지 시작은 짝수여야 한다
+        blob += b"\xff\xff"          # 체인 종료 (상위비트가 서면 끝)
+
+        for r in sites:
+            imm = int(r["imm_at"], 16)
+            assert int.from_bytes(rom[imm:imm + 4], "big") == anchor, \
+                f"{r['imm_at']}: 즉치가 {anchor_s} 가 아니다"
+            rom[imm:imm + 4] = start.to_bytes(4, "big")
+        log.append(f"  {anchor_s} -> {start:06X}  메시지 {len(msgs)}개 "
+                   f"({len(kos)}개 번역) / {CHAIN_AT + len(blob) - start}B / "
+                   f"즉치 {len(sites)}곳" + (f"  ✗ 코드 초과 {over}" if over else ""))
+    return bytes(blob), log
+
+
 def main() -> None:
-    rom = bytearray(SRC.read_bytes())
+    src = SRC.read_bytes()
+    rom = bytearray(src)
     rom.extend(b"\xff" * (ROM_SIZE - len(rom)))
     vram = VRAM.read_bytes()
-    g7, g7map = G7_BIN.read_bytes(), json.loads(G7_MAP.read_text())
-    ko = load_ko()
+    g = Glyphs(vram)
+    ko = load_tsv(KO_TSV, 0, 2, 3)
 
     # 번역이 있는 스테이지만 처리 (나머지는 원문 그대로 남는다)
     stages = [s for s in range(1, 21)
               if all(f"{k}-{s:02d}" in ko for k in KINDS)]
     if not stages:
         raise SystemExit("번역된 스테이지가 없다 (translation/ko.tsv)")
-
-    # 전역 글리프 테이블 — 전 스테이지의 합집합
-    gid: dict[str, int] = {}
     for s in stages:
         for k in KINDS:
-            for ch in ko[f"{k}-{s:02d}"]:
-                if ch not in ASCII_OK and ch != "\n" and ch not in gid:
-                    gid[ch] = len(gid)
-    table = bytearray()
-    for ch in gid:
-        if ch in FROM_VRAM:
-            t = FROM_VRAM[ch]
-            table += vram[t * 32:(t + 1) * 32]
-        elif ch in g7map:
-            table += to_4bpp(g7[g7map[ch] * 8:g7map[ch] * 8 + 8])
-        else:
-            raise SystemExit(f"글리프 없음: {ch!r}")
-    rom[KFONT_AT:KFONT_AT + len(table)] = table
+            g.add(ko[f"{k}-{s:02d}"])
 
-    labels = make_labels()
-    rom[LABEL_AT:LABEL_AT + len(labels)] = labels
+    namestr, nameids, name_n = build_names(g)
+    chains, chain_log = build_chains(rom, src, g)
 
+    place(rom, NAMESTR_AT, namestr, "이름 문자열표")
+    place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")
+    place(rom, CHAIN_AT, chains, "대사 체인")
+    place(rom, LABEL_AT, make_labels(), "승리/패배 라벨")
+    place(rom, KFONT_AT, g.table(), "글리프 테이블")   # 글리프는 모두 모인 뒤에 굽는다
+
+    # 프롤로그 훅
     want = b"\x4e\xb9" + STRDRAW.to_bytes(4, "big")
     assert rom[HOOK_SITE:HOOK_SITE + 6] == want, f"{HOOK_SITE:06X} 가 jsr ${STRDRAW:X} 아님"
     code = build_uploader_labels(kfont=KFONT_AT, slot_base=SLOT_BASE, target=STRDRAW,
                                  label_src=LABEL_AT, label_dst=LABEL_DST,
                                  label_tiles=LABEL_TILES)
-    assert UPLOADER_AT + len(code) <= LABEL_AT, "업로더가 라벨 데이터와 겹친다"
-    rom[UPLOADER_AT:UPLOADER_AT + len(code)] = code
+    place(rom, UPLOADER_AT, code, "프롤로그 업로더")
     rom[HOOK_SITE:HOOK_SITE + 6] = b"\x4e\xb9" + UPLOADER_AT.to_bytes(4, "big")
 
-    # 코드 -> 타일 매핑은 전 스테이지 공통이므로 한 번만
-    for i in range(len(CODES)):
-        rom[TABLE_AT + CODES[i]] = SLOT_BASE + i
+    # 대사 훅 — move.l a1,$E818 (6B) 자리를 jsr (6B) 로 바꾼다
+    want2 = b"\x23\xc9\xff\xff\xe8\x18"
+    assert rom[MSG_HOOK:MSG_HOOK + 6] == want2, f"{MSG_HOOK:06X} 가 move.l a1,$E818 아님"
+    code2 = build_uploader_msg(kfont=KFONT_AT, body_base=SLOT_BASE, name_base=NAME_BASE,
+                               name_ids=NAMEIDS_AT, name_n=name_n)
+    place(rom, UPLOADER2_AT, code2, "대사 업로더")
+    rom[MSG_HOOK:MSG_HOOK + 6] = b"\x4e\xb9" + UPLOADER2_AT.to_bytes(4, "big")
 
+    # 이름 문자열표 포인터
+    assert int.from_bytes(rom[NAMEPTR_IMM:NAMEPTR_IMM + 4], "big") == NAMETBL_ORIG, \
+        f"{NAMEPTR_IMM:06X} 가 이름표 즉치 아님"
+    rom[NAMEPTR_IMM:NAMEPTR_IMM + 4] = NAMESTR_AT.to_bytes(4, "big")
+
+    # 코드 -> 타일 매핑은 전 화면 공통이므로 한 번만
+    for i, c in enumerate(CODES):
+        rom[TABLE_AT + c] = SLOT_BASE + i
+    for i, c in enumerate(NAME_CODES):
+        rom[TABLE_AT + c] = NAME_BASE + i
+
+    # 프롤로그 화면 — 한 화면 세 문자열이 슬롯을 공유한다
     at = TEXT_AT
     print(f"{'st':>3}  {'글리프':>5}  {'바이트':>6}   위치")
     over = []
     for s in stages:
         texts = {k: ko[f"{k}-{s:02d}"] for k in KINDS}
-        slots: dict[str, int] = {}
-        for k in KINDS:
-            for ch in texts[k]:
-                if ch not in ASCII_OK and ch != "\n" and ch not in slots:
-                    slots[ch] = len(slots)
+        slots = assign([texts[k] for k in KINDS])
         if len(slots) > len(CODES):
             over.append((s, len(slots)))
-
-        def enc(t: str) -> bytes:
-            out = bytearray()
-            for ch in t:
-                if ch == "\n":
-                    out += b"\x0d\x0d"          # 시각적 한 줄 = 0x0D 두 개
-                elif ch in ASCII_OK:
-                    out.append(ord(ch))
-                else:
-                    out.append(CODES[slots[ch]])
-            out.append(0xFF)
-            return bytes(out)
-
-        # 글리프 ID 는 7비트 두 바이트 (ID = (b0<<7)|b1). 두 바이트 모두 0x80
-        # 미만이므로 0xFF 가 절대 나오지 않는다 — 게임이 메시지를 건너뛸 때
-        # 0xFF 를 바이트 단위로 훑기 때문(0x15470)에 반드시 지켜야 한다.
-        header = bytearray([0xFE, len(slots)])
-        for ch in slots:
-            g = gid[ch]
-            if g > 0x3FFF:
-                raise SystemExit(f"글리프 ID {g} 가 14비트를 넘는다")
-            header += bytes([g >> 7, g & 0x7F])
-
         start, total = at, 0
         for i, k in enumerate(KINDS):
-            blob = (bytes(header) if i == 0 else b"") + enc(texts[k])
-            rom[at:at + len(blob)] = blob
+            blob = (g.header(slots) if i == 0 else b"") + encode(texts[k], slots) + b"\xff"
+            at = place(rom, at, blob, f"화면 {k}-{s:02d}") + 2
             t = TABLES[k]
-            rom[t + (s - 1) * 4:t + (s - 1) * 4 + 4] = at.to_bytes(4, "big")
-            at += len(blob) + 2
+            rom[t + (s - 1) * 4:t + (s - 1) * 4 + 4] = (at - len(blob) - 2).to_bytes(4, "big")
             total += len(blob)
         mark = "✗" if len(slots) > len(CODES) else " "
         print(f"{s:3d}  {len(slots):3d}/{len(CODES)}{mark} {total:6d}   {start:06X}")
@@ -190,9 +375,14 @@ def main() -> None:
 
     out = Path("work/korom_all.md")
     out.write_bytes(rom)
-    print(f"\n스테이지 {len(stages)}개 / 전역 글리프 {len(gid)}개 ({len(table)}B)")
-    print(f"업로더 {UPLOADER_AT:06X} {len(code)}B / 라벨 {LABEL_AT:06X} / "
-          f"글리프 {KFONT_AT:06X} / 텍스트 {TEXT_AT:06X}~{at:06X}")
+    print(f"\n대사 체인 {len(chain_log)}개")
+    print("\n".join(chain_log))
+    print(f"\n전역 글리프 {len(g.gid)}개 / 이름 {name_n}개")
+    pro = [r for r in PLACED if r[2].startswith("화면 ")]
+    for s, e, label in sorted(r for r in PLACED if r not in pro):
+        print(f"  {s:06X}..{e:06X}  {e - s:6d}B  {label}")
+    print(f"  {min(pro)[0]:06X}..{max(pro)[1]:06X}  "
+          f"{sum(e - s for s, e, _ in pro):6d}B  프롤로그 화면 텍스트 {len(pro)}개")
     if over:
         print(f"\n✗ 코드 초과: {over}  — 어휘를 줄이거나 CODES 를 늘려야 한다")
     print(f"-> {out}")

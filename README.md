@@ -21,6 +21,8 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 
 | 파일 | 용도 |
 |---|---|
+| `tools/build_all.py` | 한글화 롬 빌드 → `work/korom_all.md` |
+| `tools/chain.py` | 본편 대사 체인 파서 (앵커 하나 = 대화 한 덩이) |
 | `tools/script.py` | 대본 코덱 + 추출기 → `work/script.json`, `work/script.tsv` |
 | `tools/textcodec.py` | 타일 인덱스 기준 코덱 (화면 복원용) |
 | `tools/refs.py` | 대본 주소를 싣는 68000 즉치 전수 탐색 → `work/refs.json` |
@@ -31,6 +33,15 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 
 모든 도구는 레포 루트에서 `python3 tools/<name>.py` 로 실행한다.
 `work/` 는 gitignore 되어 있으며 도구가 알아서 채운다.
+
+## 번역 원고
+
+| 파일 | 내용 |
+|---|---|
+| `translation/ko.tsv` | 프롤로그 화면 (스테이지명·프롤로그·승패조건) |
+| `translation/dialogue.tsv` | 본편 대사. 앵커 + 메시지 번호로 식별 |
+| `translation/names.tsv` | 이름판 78개 (`0x2AE64` 표 순서) |
+| `translation/glossary.tsv` | 고유명사 표기 결정과 근거 |
 
 ## 폰트
 
