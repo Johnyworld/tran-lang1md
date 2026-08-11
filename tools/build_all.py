@@ -30,6 +30,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asm import build_uploader_labels, build_uploader_msg  # noqa: E402
 from chain import parse_chain  # noqa: E402
+from events import e82c_sites  # noqa: E402
+from script import decode  # noqa: E402
 
 SRC = Path("/Users/rotein/Downloads/Langrisser.md")
 VRAM = Path("work/Mega Drive/Langrisser-vdp-vram-20260811-151039.bin")
@@ -40,7 +42,6 @@ LABEL_MAP = Path("font/dunggeunmo/font-6883cc1477b4cbfa_glyph_map.json")
 KO_TSV = Path("translation/ko.tsv")
 NAMES_TSV = Path("translation/names.tsv")
 DIALOGUE_TSV = Path("translation/dialogue.tsv")
-REFS = Path("work/refs.json")
 
 ROM_SIZE = 0x100000
 UPLOADER_AT, UPLOADER2_AT = 0x80000, 0x80200
@@ -128,14 +129,31 @@ def load_tsv(path: Path, key: int, val: int, ncol: int) -> dict[str, str]:
     return out
 
 
-def load_dialogue() -> dict[str, list[str | None]]:
-    """앵커 -> 메시지 순서대로의 한국어 (빈 칸은 None = 원문 유지)."""
-    out: dict[str, dict[int, str]] = {}
-    for ln in DIALOGUE_TSV.read_text().rstrip("\n").split("\n")[1:]:
+def esc(s: str) -> str:
+    """워크시트에 적히는 형태로 — 원문 기억의 키를 맞추기 위한 것."""
+    return s.replace("\n", "\\n").replace("\t", " ")
+
+
+def load_dialogue() -> tuple[dict[tuple[str, int], str], dict[str, str]]:
+    """(앵커, 메시지번호) -> 한국어, 그리고 **원문 -> 한국어 기억**.
+
+    같은 대사가 화자 워드만 바꿔 여러 앵커에 복사돼 있다(스테이지 16 의 검 습득
+    대사는 8벌). 워크시트에는 한 벌만 싣고, 나머지는 원문이 같으면 기억에서
+    끌어온다. 같은 문장을 여러 번 옮겨 적지 않기 위한 것이다.
+    """
+    rows = DIALOGUE_TSV.read_text().rstrip("\n").split("\n")
+    cols = rows[0].split("\t")
+    ia, ii, ij, ik = (cols.index(c) for c in ("anchor", "idx", "jp", "ko"))
+    explicit: dict[tuple[str, int], str] = {}
+    memory: dict[str, str] = {}
+    for ln in rows[1:]:
         c = ln.split("\t")
-        if len(c) >= 4 and c[3]:
-            out.setdefault(c[0], {})[int(c[1])] = c[3].replace("\\n", "\n")
-    return {a: [d.get(i) for i in range(max(d) + 1)] for a, d in out.items()}
+        if len(c) <= ik or not c[ik]:
+            continue
+        ko = c[ik].replace("\\n", "\n")
+        explicit[(c[ia], int(c[ii]))] = ko
+        memory.setdefault(c[ij], ko)
+    return explicit, memory
 
 
 class Glyphs:
@@ -251,24 +269,35 @@ def build_chains(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, list[str
     (선택은 런타임 $E824) **원본의 모양을 그대로 보존**하면 판단이 필요없다 —
     비어 있던 칸은 비우고, 본문이던 칸에 번역을 넣는다.
     """
-    refs = json.loads(REFS.read_text())
-    ko = load_dialogue()
-    blob, log = bytearray(), []
-    for anchor_s, kos in sorted(ko.items()):
-        anchor = int(anchor_s, 16)
-        msgs = parse_chain(src, anchor)
-        if len(kos) > len(msgs):
-            raise SystemExit(f"{anchor_s}: 번역 {len(kos)}개 > 메시지 {len(msgs)}개")
-
-        sites = [r for r in refs if int(r["target"], 16) == anchor]
-        if not sites:
-            raise SystemExit(f"{anchor_s}: 이 앵커를 싣는 즉치를 못 찾았다")
+    explicit, memory = load_dialogue()
+    sites_of = e82c_sites(src)
+    blob, log, stats = bytearray(), [], [0, 0, 0]      # 체인 / 번역메시지 / 원문메시지
+    partial: list[tuple[str, int, int]] = []
+    for anchor in sorted(sites_of):
+        anchor_s = f"{anchor:06X}"
+        try:
+            msgs = parse_chain(src, anchor)
+        except ValueError as e:
+            log.append(f"  {anchor_s} 파싱 실패, 건너뜀: {e}")
+            continue
+        kos = [explicit.get((anchor_s, i)) or memory.get(esc(decode(m["s1"] or m["s2"])))
+               for i, m in enumerate(msgs)]
+        # 체인은 전부 한글이거나 전부 원문이어야 한다. 글리프 슬롯(타일 128..191)은
+        # 게임의 가나 폰트 자리라서, 한 메시지가 한글을 올리면 같은 체인의 남은
+        # 일본어 메시지는 그 타일을 가나로 읽어 깨진다.
+        if not all(kos):
+            stats[2] += len(msgs)
+            if any(kos):
+                partial.append((anchor_s, sum(1 for k in kos if k), len(msgs)))
+            continue
 
         if len(blob) & 1:
             blob.append(0x00)
         start, over = CHAIN_AT + len(blob), []
+        stats[0] += 1
         for i, m in enumerate(msgs):
-            text = kos[i] if i < len(kos) else None
+            text = kos[i]
+            stats[1 if text else 2] += 1
             if text is None:
                 s1, s2 = m["s1"], m["s2"]          # 원문 그대로
             else:
@@ -286,14 +315,17 @@ def build_chains(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, list[str
                 blob.append(0x00)    # 짝수 정렬 — 메시지 시작은 짝수여야 한다
         blob += b"\xff\xff"          # 체인 종료 (상위비트가 서면 끝)
 
-        for r in sites:
-            imm = int(r["imm_at"], 16)
+        for imm in sites_of[anchor]:
             assert int.from_bytes(rom[imm:imm + 4], "big") == anchor, \
-                f"{r['imm_at']}: 즉치가 {anchor_s} 가 아니다"
+                f"{imm:06X}: 즉치가 {anchor_s} 가 아니다"
             rom[imm:imm + 4] = start.to_bytes(4, "big")
-        log.append(f"  {anchor_s} -> {start:06X}  메시지 {len(msgs)}개 "
-                   f"({len(kos)}개 번역) / {CHAIN_AT + len(blob) - start}B / "
-                   f"즉치 {len(sites)}곳" + (f"  ✗ 코드 초과 {over}" if over else ""))
+        n_ko = sum(1 for k in kos if k)
+        log.append(f"  {anchor_s} -> {start:06X}  메시지 {n_ko}/{len(msgs)} 번역 / "
+                   f"{CHAIN_AT + len(blob) - start}B / 즉치 {len(sites_of[anchor])}곳"
+                   + (f"  ✗ 코드 초과 {over}" if over else ""))
+    log.append(f"  체인 {stats[0]}개 / 메시지 한글 {stats[1]}개, 원문 {stats[2]}개")
+    for a, n, tot in partial:
+        log.append(f"  {a} 번역 {n}/{tot} — 체인이 덜 찼으므로 원문 그대로 뒀다")
     return bytes(blob), log
 
 
@@ -375,7 +407,7 @@ def main() -> None:
 
     out = Path("work/korom_all.md")
     out.write_bytes(rom)
-    print(f"\n대사 체인 {len(chain_log)}개")
+    print("\n대사 체인")
     print("\n".join(chain_log))
     print(f"\n전역 글리프 {len(g.gid)}개 / 이름 {name_n}개")
     pro = [r for r in PLACED if r[2].startswith("화면 ")]
