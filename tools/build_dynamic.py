@@ -64,6 +64,19 @@ def to_4bpp(g8: bytes) -> bytes:
     return bytes(out)
 
 
+def pick_kr(row_id: str) -> str:
+    """ko.tsv 에서 id 로 번역문을 고른다.
+
+    같은 화면의 번역이 방식별로 둘 있다 — 정적 8x8 은 안전 타일 40개 제약 때문에
+    축약판을, 동적 업로드는 제약이 없으니 완전판을 쓴다.
+    """
+    for ln in KO_TSV.read_text().rstrip("\n").split("\n")[1:]:
+        c = ln.split("\t")
+        if c[0] == row_id:
+            return c[2]
+    raise SystemExit(f"ko.tsv 에 id={row_id} 없음")
+
+
 def main() -> None:
     rom = bytearray(SRC.read_bytes())
     rom.extend(b"\xff" * (ROM_SIZE - len(rom)))          # 1MB 로 확장
@@ -71,7 +84,7 @@ def main() -> None:
     font = G7_BIN.read_bytes()
     gmap = json.loads(G7_MAP.read_text())
 
-    kr = KO_TSV.read_text().rstrip("\n").split("\n")[1].split("\t")[2]
+    kr = pick_kr("prologue-01")
     lines = kr.split("\\n")
 
     # 이 메시지가 쓰는 글리프를 모은다 (등장 순서 = 슬롯 순서)

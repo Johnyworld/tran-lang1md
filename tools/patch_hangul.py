@@ -33,13 +33,26 @@ PASSTHROUGH = {" ": 0x20, "。": 0xA1, "「": 0xA2, "」": 0xA3}
 FREE_CODES = list(range(0x7F, 0xA1)) + list(range(0xE0, 0xFE))
 
 
+def pick_kr(row_id: str) -> str:
+    """ko.tsv 에서 id 로 번역문을 고른다.
+
+    같은 화면의 번역이 방식별로 둘 있다 — 정적 8x8 은 안전 타일 40개 제약 때문에
+    축약판을, 동적 업로드는 제약이 없으니 완전판을 쓴다.
+    """
+    for ln in KO_TSV.read_text().rstrip("\n").split("\n")[1:]:
+        c = ln.split("\t")
+        if c[0] == row_id:
+            return c[2]
+    raise SystemExit(f"ko.tsv 에 id={row_id} 없음")
+
+
 def main() -> None:
     rom = bytearray(SRC.read_bytes())
     font = G7_BIN.read_bytes()
     gmap = json.loads(G7_MAP.read_text())
     safe = {int(k): v for k, v in json.loads(SAFE.read_text()).items()}
 
-    kr = KO_TSV.read_text().rstrip("\n").split("\n")[1].split("\t")[2]
+    kr = pick_kr("prologue-01-static")
     lines = kr.split("\\n")
     syll = sorted({c for c in kr if "가" <= c <= "힣"})
 
