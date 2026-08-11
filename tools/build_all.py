@@ -6,6 +6,7 @@ build_screen.py 를 20스테이지로 일반화한 것. 핵심 설계 변경은 
 
   - 전역 글리프 테이블: 20스테이지에 쓰이는 모든 글리프를 모아 ID 를 부여
   - 스테이지별 헤더: 그 화면이 쓰는 글리프의 **전역 ID** 목록 (최대 64개)
+    ID 는 7비트 두 바이트로 담아 0xFF 가 섞이지 않게 한다
   - `$62BC`: 코드 -> 타일(SLOT_BASE+i) 매핑은 모든 스테이지가 같으므로 한 번만 설정
 
 덕분에 업로더도 하나, 테이블도 하나면 된다. 화면이 바뀔 때 달라지는 것은
@@ -163,9 +164,15 @@ def main() -> None:
             out.append(0xFF)
             return bytes(out)
 
+        # 글리프 ID 는 7비트 두 바이트 (ID = (b0<<7)|b1). 두 바이트 모두 0x80
+        # 미만이므로 0xFF 가 절대 나오지 않는다 — 게임이 메시지를 건너뛸 때
+        # 0xFF 를 바이트 단위로 훑기 때문(0x15470)에 반드시 지켜야 한다.
         header = bytearray([0xFE, len(slots)])
         for ch in slots:
-            header += gid[ch].to_bytes(2, "big")
+            g = gid[ch]
+            if g > 0x3FFF:
+                raise SystemExit(f"글리프 ID {g} 가 14비트를 넘는다")
+            header += bytes([g >> 7, g & 0x7F])
 
         start, total = at, 0
         for i, k in enumerate(KINDS):

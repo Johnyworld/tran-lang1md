@@ -90,8 +90,14 @@ def build_uploader(kfont: int, slot_base: int, p_work: int, resume: int) -> byte
     body += lea_abs(VDP_DATA, 2)                 # lea (C00000).l, a2
     loop_at = len(body)
     body += vdp_set_write(0, 1)                  # d0 스크래치, d1 = 주소
+    # 글리프 ID 는 7비트 두 바이트로 담는다: ID = (b0 << 7) | b1.
+    # 16비트로 담으면 ID 255 가 0x00FF 처럼 0xFF 를 포함하는데, 게임은 메시지를
+    # 건너뛸 때 0xFF 를 바이트 단위로 훑으므로(0x15470) 헤더 중간에서 멈춘다.
+    # 두 바이트 모두 0x80 미만이면 그 사고가 원천적으로 없다.
     body += w(0x7400)                            # moveq #0, d2
-    body += w(0x3418)                            # move.w (a0)+, d2     글리프 ID
+    body += w(0x1418)                            # move.b (a0)+, d2     상위 7비트
+    body += w(0xEF4A)                            # lsl.w #7, d2
+    body += w(0x8418)                            # or.b  (a0)+, d2      하위 7비트
     body += w(0xE58A) + w(0xE58A) + w(0xE38A)    # lsl.l #2,#2,#1 -> x32
     body += lea_abs(kfont, 1)                    # lea KFONT, a1
     body += w(0xD3C2)                            # adda.l d2, a1
@@ -163,8 +169,14 @@ def build_uploader_a1(kfont: int, slot_base: int, target: int) -> bytes:
     body += lea_abs(VDP_DATA, 2)                 # lea (C00000).l, a2
     loop_at = len(body)
     body += vdp_set_write(0, 1)                  # d0 스크래치, d1 = VRAM 주소
+    # 글리프 ID 는 7비트 두 바이트로 담는다: ID = (b0 << 7) | b1.
+    # 16비트로 담으면 ID 255 가 0x00FF 처럼 0xFF 를 포함하는데, 게임은 메시지를
+    # 건너뛸 때 0xFF 를 바이트 단위로 훑으므로(0x15470) 헤더 중간에서 멈춘다.
+    # 두 바이트 모두 0x80 미만이면 그 사고가 원천적으로 없다.
     body += w(0x7400)                            # moveq #0, d2
-    body += w(0x3418)                            # move.w (a0)+, d2     글리프 ID
+    body += w(0x1418)                            # move.b (a0)+, d2     상위 7비트
+    body += w(0xEF4A)                            # lsl.w #7, d2
+    body += w(0x8418)                            # or.b  (a0)+, d2      하위 7비트
     body += w(0xE58A) + w(0xE58A) + w(0xE38A)    # lsl.l #2,#2,#1 -> x32
     body += lea_abs(kfont, 3)                    # lea KFONT, a3
     body += w(0xD7C2)                            # adda.l d2, a3
