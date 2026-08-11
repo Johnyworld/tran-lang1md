@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from asm import build_hook, build_uploader  # noqa: E402
+from asm import build_uploader_a1  # noqa: E402
 
 SRC = Path("/Users/rotein/Downloads/Langrisser.md")
 VRAM = Path("work/Mega Drive/Langrisser-vdp-vram-20260811-151039.bin")
@@ -36,11 +36,14 @@ G7_MAP = Path("font/galmuri7/font-007242d37349daf3_glyph_map.json")
 KO_TSV = Path("translation/ko.tsv")
 
 ROM_SIZE = 0x100000
-UPLOADER_AT, KFONT_AT, MSG_AT = 0x80000, 0x80200, 0x90000
-# 텍스트 렌더 경로가 둘이다. 프롤로그는 0x15650 쪽을 쓴다.
-#   0x15568 의 beq 가 항상 성립해 실행이 0x15650 으로 가므로 0x15576 만 걸면 안 걸린다.
-# 두 경로 모두 첫 명령이 movea.l $E818,a1 (6바이트) 이라 같은 루틴을 재사용한다.
-HOOKS = [(0x15576, 0x1557C), (0x15650, 0x15656)]
+UPLOADER_AT, KFONT_AT, MSG_AT = 0x80000, 0x81000, 0x90000
+# 프롤로그 렌더러 0x18CE8 이 테이블에서 주소를 읽어 a1 에 담고 $5F60 을 호출한다.
+#   018D18  lea     $38BF2.l, a1
+#   018D1E  movea.l (a1, d7.w), a1     a1 = 문자열 주소
+#   018D2A  jsr     $5F60.l            <- 이 6바이트를 우리 루틴 호출로 바꾼다
+# $E818 을 쓰는 0x15576 / 0x15650 은 전투 중 대사용이라 프롤로그에선 안 걸린다
+# (프롤로그 화면의 CPU RAM 덤프에서 해당 변수가 전부 0).
+HOOK_SITE, STRDRAW = 0x18D2A, 0x5F60
 TABLE_AT = 0x62BC
 PTR_TABLE, PTR_INDEX = 0x38BF2, 0            # 스테이지 프롤로그 0번
 SLOT_BASE = 128
@@ -108,17 +111,15 @@ def main() -> None:
     rom[KFONT_AT:KFONT_AT + len(table)] = table
 
     # 업로더 + 훅
-    for i, (site, resume) in enumerate(HOOKS):
-        assert rom[site:site + 6] == b"\x22\x79\xff\xff\xe8\x18", \
-            f"{site:06X} 의 첫 명령이 movea.l $E818,a1 가 아니다"
-        at = UPLOADER_AT + i * 0x100
-        code = build_uploader(kfont=KFONT_AT, slot_base=SLOT_BASE,
-                              p_work=0xFFFFE818, resume=resume)
-        rom[at:at + len(code)] = code
-        hook = build_hook(at)
-        assert len(hook) == 6
-        rom[site:site + 6] = hook
-        print(f"훅            {site:06X} -> {at:06X}  (resume {resume:06X})")
+    want = b"\x4e\xb9" + STRDRAW.to_bytes(4, "big")
+    assert rom[HOOK_SITE:HOOK_SITE + 6] == want, \
+        f"{HOOK_SITE:06X} 가 jsr ${STRDRAW:X} 가 아니다: {rom[HOOK_SITE:HOOK_SITE+6].hex()}"
+    code = build_uploader_a1(kfont=KFONT_AT, slot_base=SLOT_BASE, target=STRDRAW)
+    rom[UPLOADER_AT:UPLOADER_AT + len(code)] = code
+    assert UPLOADER_AT + len(code) <= KFONT_AT, "루틴이 글리프 테이블과 겹친다"
+    rom[HOOK_SITE:HOOK_SITE + 6] = b"\x4e\xb9" + UPLOADER_AT.to_bytes(4, "big")
+    print(f"업로더        {UPLOADER_AT:06X}  {len(code)}B")
+    print(f"훅            {HOOK_SITE:06X}  jsr {STRDRAW:06X} -> jsr {UPLOADER_AT:06X}")
 
     # $62BC — 우리 코드만 타일로. 일본어 구간(0xA1..0xDF)은 손대지 않는다.
     for i in range(len(slots)):

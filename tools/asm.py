@@ -133,3 +133,56 @@ if __name__ == "__main__":
                           p_work=0xFFFFE818, p_state=0xFFFF8010)
     print(f"루틴 {len(code)} bytes\n")
     print("\n".join(disasm(code, 0x80000)))
+
+
+def build_uploader_a1(kfont: int, slot_base: int, target: int) -> bytes:
+    """a1 로 넘어온 문자열의 헤더를 읽어 글리프를 올린 뒤 target 으로 꼬리호출한다.
+
+    프롤로그 렌더러(0x18D2A)의 `jsr $5F60` 을 이 루틴 호출로 바꿔 쓴다.
+    주소가 RAM 변수가 아니라 a1 에 직접 실려 오므로 $E818 을 볼 필요가 없다.
+
+    d1..d5 는 $5F60 의 인자이므로 반드시 보존한다. d0 은 $5F60 이 진입 후
+    스스로 채우므로 자유롭게 쓴다.
+    """
+    body = bytearray()
+    body += w(0x0C11) + w(MARKER)                # cmpi.b #$FE, (a1)
+    body += w(0x6600) + w(0x0000)                # bne.w .out
+    bne_at = len(body) - 2
+
+    body += w(0x48E7) + w(0xFFF0)                # movem.l d0-d7/a0-a3, -(a7)
+    body += w(0x40E7)                            # move.w sr, -(a7)
+    body += w(0x46FC) + w(0x2700)                # move.w #$2700, sr
+    body += w(0x2049)                            # movea.l a1, a0
+    body += w(0x5288)                            # addq.l #1, a0        마커 건너뛰기
+    body += w(0x7E00)                            # moveq #0, d7
+    body += w(0x1E18)                            # move.b (a0)+, d7     N
+    body += w(0x6700) + w(0x0000)                # beq.w .rest
+    beq_at = len(body) - 2
+    body += w(0x5347)                            # subq.w #1, d7
+    body += w(0x323C) + w(slot_base * 32)        # move.w #slot*32, d1
+    body += lea_abs(VDP_DATA, 2)                 # lea (C00000).l, a2
+    loop_at = len(body)
+    body += vdp_set_write(0, 1)                  # d0 스크래치, d1 = VRAM 주소
+    body += w(0x7400)                            # moveq #0, d2
+    body += w(0x3418)                            # move.w (a0)+, d2     글리프 ID
+    body += w(0xE58A) + w(0xE58A) + w(0xE38A)    # lsl.l #2,#2,#1 -> x32
+    body += lea_abs(kfont, 3)                    # lea KFONT, a3
+    body += w(0xD7C2)                            # adda.l d2, a3
+    body += w(0x249B) * 8                        # move.l (a3)+, (a2)   32바이트
+    body += w(0x0641) + w(0x0020)                # addi.w #32, d1
+    body += w(0x51CF) + w((loop_at - (len(body) + 2)) & 0xFFFF)   # dbra d7, loop
+
+    body[beq_at:beq_at + 2] = w(len(body) - (beq_at - 2) - 2)      # .rest
+    body += w(0x46DF)                            # move.w (a7)+, sr
+    body += w(0x4CDF) + w(0x0FFF)                # movem.l (a7)+, d0-d7/a0-a3
+
+    # a1 을 헤더 뒤(본문)로 옮긴다. 헤더 길이 = 2 + 2N.
+    body += w(0x7000)                            # moveq #0, d0
+    body += w(0x1029) + w(0x0001)                # move.b 1(a1), d0     N
+    body += w(0xD040)                            # add.w d0, d0         2N
+    body += w(0x5440)                            # addq.w #2, d0        +2
+    body += w(0xD2C0)                            # adda.w d0, a1
+
+    body[bne_at:bne_at + 2] = w(len(body) - (bne_at - 2) - 2)      # .out
+    body += w(0x4EF9) + l(target)                # jmp (target).l  꼬리호출
+    return bytes(body)
