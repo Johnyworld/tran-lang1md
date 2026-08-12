@@ -43,7 +43,9 @@ import sys
 from pathlib import Path
 
 CLS_TBL, CLS_STRIDE = 0x2C06C, 128
-ALLY = range(1, 34)              # 광 진영 계열
+# 광 진영 지휘관 계열(1..33) + 광 진영 용병(65..72). 용병도 플레이어 유닛이라
+# 같이 올린다 — 지휘관만 세면 용병이 녹아서 오히려 확인이 느려진다.
+ALLY = list(range(1, 34)) + list(range(65, 73))
 FOE = range(34, 63)              # 암 진영 계열
 OFF = {"MP": 4, "AT": 6, "DF": 8, "MV": 0xA, "CMD": 0x70}
 
@@ -96,7 +98,7 @@ def main() -> None:
             poke(rom, cls, field, value)
         at = CLS_TBL + cls * CLS_STRIDE + EXP_OFF
         rom[at:at + 2] = EXP_FAST.to_bytes(2, "big")
-    print(f"아군 클래스 {ALLY.start}..{ALLY.stop - 1}: "
+    print(f"아군 클래스 {len(ALLY)}개 (지휘관 1..33 + 용병 65..72): "
           + " ".join(f"{k}={v}" for k, v in BOOST.items())
           + f" / 레벨업 문턱 {EXP_FAST * 8} EXP")
     assert rom[CC_IMM] == CC_ORIG, f"{CC_IMM:06X} 가 전직 레벨 조건이 아니다"
