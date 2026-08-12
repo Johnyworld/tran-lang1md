@@ -39,6 +39,9 @@ BOOST = {"MP": 99, "AT": 99, "DF": 99, "MV": 10, "CMD": 8}
 WEAKEN = {"AT": 1, "DF": 1}
 
 IN, OUT = Path("work/korom_all.md"), Path("work/korom_debug.md")
+# 헤더 노트 필드(게임 동작과 무관)에 표식을 남긴다. 나중에 어느 파일이 무엇인지
+# 구분되고, `build_all.py --release` 와 `release_check.py` 가 이것을 거부한다.
+NOTE_AT, NOTE = 0x1C8, b"DEBUG BUILD - NOT FOR RELEASE"
 
 
 def poke(rom: bytearray, cls: int, field: str, value: int) -> int:
@@ -75,8 +78,12 @@ def main() -> None:
               f"{int.from_bytes(IN.read_bytes()[q:q+2], 'big'):3d}"
               f" -> {int.from_bytes(rom[q:q+2], 'big'):3d}")
 
-    # 체크섬은 이미 우회돼 있다(0x18E = 0000). 배포판에서만 정상값을 넣는다.
-    assert rom[0x18E:0x190] == b"\x00\x00", "체크섬 우회가 풀렸다 — 부팅이 죽는다"
+    rom[NOTE_AT:NOTE_AT + len(NOTE)] = NOTE
+    print(f"\n헤더 표식 {NOTE_AT:04X}: {NOTE.decode()}")
+    # 바이트를 고쳤으니 체크섬은 어차피 안 맞는다. 재계산하지 않고 **우회**를 쓴다
+    # (0x18E = 0 이면 0x4630 이 비교를 건너뛴다). 입력이 --release 빌드여도 된다.
+    rom[0x18E] = rom[0x18F] = 0
+    print("체크섬 우회 0x18E = 0000 (디버그 롬은 항상 우회)")
     OUT.write_bytes(rom)
     print(f"\n-> {OUT}  ({len(rom)} bytes)")
 

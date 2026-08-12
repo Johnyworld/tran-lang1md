@@ -810,10 +810,20 @@ def main() -> None:
     rom[UI_HOOK:UI_HOOK + 6] = b"\x4e\xb9" + UI_UPLOADER_AT.to_bytes(4, "big")
 
     rom[0x1A4:0x1A8] = (ROM_SIZE - 1).to_bytes(4, "big")
-    rom[0x18E] = rom[0x18F] = 0
+    # 체크섬 — 개발 중에는 우회(0x18E = 0)를 쓴다. 0x4630 의 검사 루틴이 0 이면
+    # 비교를 건너뛰기 때문이고, 매 빌드 재계산을 한 번 빠뜨리면 원인 불명의 빨간
+    # 화면을 보게 된다. **배포판은 --release 로 정상값을 넣는다** (docs/RELEASE.md).
+    release = "--release" in sys.argv
+    if release:
+        total = sum(int.from_bytes(rom[p:p + 2], "big")
+                    for p in range(0x200, ROM_SIZE, 2)) & 0xFFFF
+        rom[0x18E:0x190] = total.to_bytes(2, "big")
+    else:
+        rom[0x18E] = rom[0x18F] = 0
 
     out = Path("work/korom_all.md")
     out.write_bytes(rom)
+    print(f"체크섬  {'정상 기록 (배포용)' if release else '우회 0x18E = 0000 (개발용)'}")
     menu.preview(src, rom, Path("work/menu_preview.png"))
     print("\nUI 문자열표")
     print("\n".join(ui_log))

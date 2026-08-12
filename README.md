@@ -15,6 +15,7 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 ## 현황
 
 분석 진행 상황은 [docs/STATUS.md](docs/STATUS.md) 에 정리한다.
+배포 전에 걷어낼 **번역이 아닌 변경**은 [docs/RELEASE.md](docs/RELEASE.md) 에 모아 둔다.
 폰트 구조·텍스트 인코딩·주소지정 방식은 규명 완료.
 
 ## 도구
@@ -25,6 +26,7 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 | `tools/menu.py` | 메뉴 그래픽 — 글리프 풀 재배치 + `$5CDC` 타일맵 서술자 재작성 |
 | `tools/uiscan.py` | 남은 일본어 UI 문자열 전수 조사 (lea 즉치 + 창 레코드 + 표) |
 | `tools/debug_rom.py` | 테스트용 — 아군을 강하게 → `work/korom_debug.md` |
+| `tools/release_check.py` | 배포판 검사 — 번역 아닌 변경이 남았는지 (`docs/RELEASE.md`) |
 | `tools/chain.py` | 본편 대사 체인 파서 (앵커 하나 = 대화 한 덩이) |
 | `tools/events.py` | 스테이지 이벤트 표 -> 앵커 (이야기 순서) |
 | `tools/sheet.py` | `translation/dialogue.tsv` 재생성 (기존 번역 보존) |
