@@ -78,6 +78,21 @@ TITLE_VRAM = 0x3800           # 리소스 0x81 이 올라가는 VRAM 주소 (타
 # 지휘관선택이 원문으로 나왔다) 로더 꼬리 한 곳으로 옮겼다 — asm.build_uploader_res.
 GRAPHLOAD_TAIL = 0x53D2       # movem.l (a7)+, d1-d2/a1 + rts (6바이트)
 TITLE_RECS = (0x030FEE, 0x03104C, 0x0310A6, 0x038800)
+
+# ---------------------------------------------------------------- 전투씬 라벨
+# `基本能力` `指揮修正` `レベル修正` `地形効果`. 넷이 **서술자 하나를 공유**하고
+# 베이스만 30씩 옮긴다 (`0x0F8FE`: d4 = 0x8588 + 라벨 x 30, 서술자 `0xFB10` 10x3).
+# 그래서 서술자는 손댈 것이 없고 **타일 픽셀만** 갈아 넣으면 된다.
+#
+# 프레임까지 한 덩이(10x3 = 80x24px)라 원본 픽셀이 필요했다. VRAM 덤프에서 떠 온다.
+#   프레임  y0..3 / y19..22, x0..3 / x76..79
+#   판 내부 배경 색 2, 글자 영역 x4..75 y5..18 (원본 한자는 색 e/f/7/3 음영)
+BATTLE_BASE, BATTLE_N, BATTLE_STRIDE = 1416, 4, 30
+BATTLE_W, BATTLE_H = 10, 3
+BATTLE_RES, BATTLE_VRAM = 0x7E, 0xB100       # 리소스 0x7E -> VRAM 0xB100 (0x0E078)
+BATTLE_PLATE = 2                             # 판 내부 배경 색
+BATTLE_BOX = (4, 76, 4, 19)                  # x0, x1, y0, y1 (글자를 지우고 그릴 범위)
+BATTLE_DUMP = Path("work/Mega Drive/korom_debug-vdp-vram-20260812-130157.bin")
 GRAPHLOAD = 0x53B4
 
 
@@ -272,6 +287,60 @@ class Pool:
 
     def bytes(self) -> bytes:
         return b"".join(self.tiles)
+
+
+def build_battle_labels() -> tuple[bytes, list[str]]:
+    """전투씬 라벨 4개. 원본 타일에서 글자만 지우고 한글을 그려 넣는다.
+
+    서술자(`0xFB10`)는 넷이 공유하므로 건드리지 않는다. 타일 120개(4 x 30)를
+    통째로 만들어 리소스 `0x7E` 가 올라올 때 VRAM `0xB100` 에 덮는다.
+    """
+    ko, log = load_ko(), []
+    font, gmap = LABEL_BIN.read_bytes(), json.loads(LABEL_MAP.read_text())
+    vram = BATTLE_DUMP.read_bytes()
+    x0, x1, y0, y1 = BATTLE_BOX
+    out = bytearray()
+    for k in range(BATTLE_N):
+        base = BATTLE_BASE + k * BATTLE_STRIDE
+        px = [[0] * (BATTLE_W * 8) for _ in range(BATTLE_H * 8)]
+        for r in range(BATTLE_H):                     # 원본 픽셀을 뜬다
+            for c in range(BATTLE_W):
+                b = (base + r * BATTLE_W + c) * 32
+                for y in range(8):
+                    for i in range(4):
+                        byte = vram[b + y * 4 + i]
+                        px[r * 8 + y][c * 8 + i * 2] = byte >> 4
+                        px[r * 8 + y][c * 8 + i * 2 + 1] = byte & 15
+        text = ko.get(("battle", k))
+        if text:
+            for y in range(y0, y1):                   # 글자 영역을 판 색으로 지운다
+                for x in range(x0, x1):
+                    px[y][x] = BATTLE_PLATE
+            if len(text) * 16 > x1 - x0:
+                raise SystemExit(f"전투씬 라벨 {k} {text!r} 이 {x1 - x0}px 를 넘는다")
+            ox = x0 + (x1 - x0 - len(text) * 16) // 2
+            for i, ch in enumerate(text):
+                if ch not in gmap:
+                    raise SystemExit(f"둥근모꼴에 글리프 없음: {ch!r}")
+                o = gmap[ch] * 32
+                for y in range(16):
+                    bits = (font[o + y * 2] << 8) | font[o + y * 2 + 1]
+                    for x in range(16):
+                        if bits >> (15 - x) & 1:
+                            px[y0 + y][ox + i * 16 + x] = INK
+            log.append(f"  라벨 {k} 타일 {base}..{base + BATTLE_STRIDE - 1}  {text}")
+        else:
+            log.append(f"  라벨 {k} 번역 없음 — 원본 유지")
+        for r in range(BATTLE_H):                     # 다시 타일로
+            for c in range(BATTLE_W):
+                for y in range(8):
+                    for i in range(4):
+                        hi = px[r * 8 + y][c * 8 + i * 2]
+                        lo = px[r * 8 + y][c * 8 + i * 2 + 1]
+                        out.append((hi << 4) | lo)
+    log.append(f"  타일 {len(out) // 32}개 -> 리소스 {BATTLE_RES:02X} 로드 시 "
+               f"VRAM {BATTLE_VRAM:04X}")
+    return bytes(out), log
 
 
 def plan(src: bytes) -> tuple[dict[int, dict], set[int]]:

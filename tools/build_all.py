@@ -71,7 +71,7 @@ LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
 UISTR_AT, UITBL_AT, ALTTBL_AT = 0x82000, 0x83000, 0x8C000
 CLSB_AT = 0x8D000        # 전직 후보용 클래스표 사본
 TITLE_AT, TITLE_UP_AT = 0x8E000, 0x80D00   # 선택 창 제목 타일 + 업로더
-RESTBL_AT = 0x8F000      # 리소스 -> 타일 블록 패치 표
+RESTBL_AT, BATTLE_AT = 0x8F000, 0x94000   # 리소스 패치 표 / 전투씬 라벨 타일
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -723,9 +723,12 @@ def main() -> None:
     place(rom, TITLE_AT, titles, "선택 창 제목 타일")
     # 리소스 패치 표 — [리소스.w][VRAM.w][타일수.w][원본.l] 10바이트 엔트리.
     # 로더 꼬리 한 곳에 훅을 걸어 **어느 경로로 로드해도** 덮는다.
+    battle, battle_log = menu.build_battle_labels()
+    place(rom, BATTLE_AT, battle, "전투씬 라벨 타일")
     patches = [(menu.TITLE_RES,
                 menu.TITLE_VRAM + menu.TITLE_OFF * 32,
-                len(titles) // 32, TITLE_AT)]
+                len(titles) // 32, TITLE_AT),
+               (menu.BATTLE_RES, menu.BATTLE_VRAM, len(battle) // 32, BATTLE_AT)]
     tbl = b"".join(res.to_bytes(2, "big") + vram.to_bytes(2, "big")
                    + n.to_bytes(2, "big") + at.to_bytes(4, "big")
                    for res, vram, n, at in patches)
@@ -742,7 +745,8 @@ def main() -> None:
                          f"{n}타일 ({at:06X})")
     title_log.append(f"  훅 {menu.GRAPHLOAD_TAIL:06X} (그래픽 로더 꼬리) -> "
                      f"{TITLE_UP_AT:06X}")
-    menu_log += ["  -- 선택 창 제목 (풀 0x81)"] + title_log
+    menu_log += (["  -- 선택 창 제목 (풀 0x81)"] + title_log
+                 + ["  -- 전투씬 라벨 (풀 0x7E)"] + battle_log)
 
     place(rom, NAMESTR_AT, namestr, "이름 문자열표")
     place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")
