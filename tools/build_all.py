@@ -50,7 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asm import UI_MARKER, BAR_MARKER  # noqa: E402
 from asm import build_uploader_labels, build_uploader_msg  # noqa: E402
 from asm import build_uploader_ui, build_uploader_res  # noqa: E402
-from asm import build_uploader_block  # noqa: E402
+from asm import build_uploader_block, build_uploader_restore  # noqa: E402
 from chain import parse_chain  # noqa: E402
 from events import e82c_sites  # noqa: E402
 import menu  # noqa: E402
@@ -76,6 +76,7 @@ CLSB_AT = 0x8D000        # 전직 후보용 클래스표 사본
 TITLE_AT, TITLE_UP_AT = 0x8E000, 0x80D00   # 선택 창 제목 타일 + 업로더
 RESTBL_AT, BATTLE_AT = 0x8F000, 0x98000   # 리소스 패치 표 / 전투씬 라벨 타일
 DEPLOY_AT, DEPLOY_UP_AT = 0x99000, 0x80E00   # 출전 준비 라벨 타일 + 업로더 2개
+BAR_TILE_AT, BAR_UP_AT = 0x99800, 0x80F00    # 전투씬 빈칸 바 타일 + 복원 업로더
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -793,6 +794,18 @@ def main() -> None:
         assert rom[at:at + len(blob)] == src[at:at + len(blob)], \
             f"{at:06X} 가 이미 다른 패치에 쓰이고 있다"
         rom[at:at + len(blob)] = blob
+
+    # 전투씬 병력 바 — 빈칸 타일 128/192 가 우리 슬롯이다. 바를 그릴 때마다 되돌린다.
+    place(rom, BAR_TILE_AT, menu.bar_empty_tile(), "빈칸 바 타일")
+    assert rom[menu.BAR_HOOK:menu.BAR_HOOK + 6] == menu.BAR_STEAL, \
+        f"{menu.BAR_HOOK:06X} 가 바 루틴의 그 명령이 아니다"
+    bcode = build_uploader_restore(src=BAR_TILE_AT,
+                                   dsts=tuple(t * 32 for t in menu.BAR_EMPTY_TILES),
+                                   steal=menu.BAR_STEAL)
+    place(rom, BAR_UP_AT, bcode, "빈칸 바 업로더")
+    rom[menu.BAR_HOOK:menu.BAR_HOOK + 6] = b"\x4e\xb9" + BAR_UP_AT.to_bytes(4, "big")
+    attack_log.append(f"  훅 {menu.BAR_HOOK:06X} -> {BAR_UP_AT:06X}  "
+                      f"빈칸 바 타일 {'/'.join(str(t) for t in menu.BAR_EMPTY_TILES)} 복원")
 
     menu_log += (["  -- 선택 창 제목 (풀 0x81)"] + title_log
                  + ["  -- 전투씬 라벨 (풀 0x7E)"] + battle_log

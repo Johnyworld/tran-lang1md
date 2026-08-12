@@ -462,6 +462,35 @@ def build_uploader_block(src: int, dst: int, tiles: int, call_first: int) -> byt
     return bytes(body)
 
 
+def build_uploader_restore(src: int, dsts: tuple[int, ...], steal: bytes) -> bytes:
+    """같은 타일 하나를 여러 VRAM 자리에 복원하고, 훔친 명령을 마지막에 실행한다.
+
+    `build_uploader_block` 과 반대 방향이다. 저쪽은 **우리 그림을 올리는** 것이고
+    이쪽은 **원본 그림을 되돌리는** 것 — 우리 글리프 슬롯이 게임의 다른 그래픽과
+    자리를 다투는데 그 화면에서는 글리프가 필요 없을 때 쓴다(전투씬 병력 바).
+
+    `jsr` 자리가 아니라 **임의의 6바이트 명령** 자리를 대신하므로, 훔친 명령
+    바이트를 레지스터 복원 뒤에 그대로 실행한다. `steal` 이 d 레지스터를 세팅하는
+    명령이어도 안전하다.
+    """
+    assert len(steal) == 6, "6바이트 명령 자리만 대신한다"
+    body = bytearray()
+    body += w(0x48E7) + w(0xFFF0)                 # movem.l d0-d7/a0-a3, -(a7)
+    body += w(0x40E7)                             # move.w sr, -(a7)
+    body += w(0x46FC) + w(0x2700)                 # move.w #$2700, sr
+    body += lea_abs(VDP_DATA, 2)                  # lea (C00000).l, a2
+    for dst in dsts:
+        body += lea_abs(src, 3)                   # lea SRC, a3
+        body += w(0x323C) + w(dst)                # move.w #dst, d1
+        body += vdp_set_write(0, 1)
+        body += w(0x249B) * 8                     # move.l (a3)+, (a2)  32바이트
+    body += w(0x46DF)                             # move.w (a7)+, sr
+    body += w(0x4CDF) + w(0x0FFF)                 # movem.l (a7)+, d0-d7/a0-a3
+    body += steal                                 # 훔친 명령
+    body += w(0x4E75)                             # rts
+    return bytes(body)
+
+
 def build_uploader_res(table: int, n: int, entry: int = 10) -> bytes:
     """그래픽 로드 직후 **리소스 번호를 보고** 타일 블록을 덮는다.
 
