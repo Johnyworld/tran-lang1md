@@ -56,9 +56,16 @@ CC_IMM, CC_ORIG, CC_DEBUG = 0xD4D5, 0x0A, 0x01
 # 팝업 강제 표시. 레벨업·전직 창은 씬 디스패처($F07C) 뒤의 시퀀스에서 뜨는데 그
 # 진입을 정적으로 못 잡았다(전투 중 레벨업은 팝업 없이 레벨만 오른다 — 실측).
 # 그래서 **쉽게 부를 수 있는 팝업의 레코드 즉치를 바꿔** 텍스트·레이아웃만 확인한다.
-#   트리거: 출전 준비 화면 -> 아이템 (가진 아이템이 없을 때)
 # 콜백($aeb8)은 그 자리에서 clr 되므로 이름·후보 클래스는 그려지지 않는다.
-POPUP_IMM, POPUP_ORIG = 0x11E8E, 0x31020        # move.l #$31020, $aeb2.w 의 즉치
+#
+# 트리거는 "마법을 못 씁니다" 를 쓴다 — 마법이 없는 유닛(레벨 1 파이터 등)으로 유닛
+# 메뉴의 마법을 고르면 뜬다. 처음에 "아이템이 없습니다" 를 썼는데 **아이템이 없으면
+# 커서가 그 항목에 아예 안 간다**(실측). 부를 수 없는 트리거는 쓸모가 없다.
+POPUP_TRIGGERS = {
+    "magic": (0x10528, 0x3094A, "유닛 메뉴 -> 마법 (마법 없는 유닛)"),
+    "item":  (0x11E8E, 0x31020, "출전 준비 -> 아이템 (아이템 없으면 커서가 안 간다)"),
+}
+POPUP_TRIGGER = "magic"
 POPUPS = {"levelup": 0x32AF4, "classchange": 0x32A8E, "promote": 0x32ABE}
 
 IN, OUT = Path("work/korom_all.md"), Path("work/korom_debug.md")
@@ -113,11 +120,12 @@ def main() -> None:
               f" -> {int.from_bytes(rom[q:q+2], 'big'):3d}")
 
     if force:
-        assert int.from_bytes(rom[POPUP_IMM:POPUP_IMM + 4], "big") == POPUP_ORIG, \
-            f"{POPUP_IMM:06X} 가 아이템없음 팝업 즉치가 아니다"
-        rom[POPUP_IMM:POPUP_IMM + 4] = POPUPS[force].to_bytes(4, "big")
-        print(f"팝업 강제 표시: 아이템없음 -> {force} ({POPUPS[force]:06X})  "
-              f"트리거 = 출전 준비 화면의 아이템")
+        imm, orig, how = POPUP_TRIGGERS[POPUP_TRIGGER]
+        assert int.from_bytes(rom[imm:imm + 4], "big") == orig, \
+            f"{imm:06X} 가 {POPUP_TRIGGER} 팝업 즉치가 아니다"
+        rom[imm:imm + 4] = POPUPS[force].to_bytes(4, "big")
+        print(f"팝업 강제 표시: {POPUP_TRIGGER} -> {force} ({POPUPS[force]:06X})\n"
+              f"  트리거 = {how}")
 
     rom[NOTE_AT:NOTE_AT + len(NOTE)] = NOTE
     print(f"\n헤더 표식 {NOTE_AT:04X}: {NOTE.decode()}")
