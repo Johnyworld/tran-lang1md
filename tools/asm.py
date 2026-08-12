@@ -223,10 +223,12 @@ def _glyph_loop(kfont: int, tile_base: int | None = 0, areg: int = 0) -> bytes:
 
 
 UI_MARKER = 0x01
+BAR_MARKER = 0x02        # 같은 기록을 쓰되 페이지·타일을 상태바용으로 덮어쓴다
 
 
 def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
-                      table_at: int = 0x62BC, alt_table: int = 0) -> bytes:
+                      table_at: int = 0x62BC, alt_table: int = 0,
+                      bar_page: int = 0, bar_tile: int = 0) -> bytes:
     """UI 문자열 업로더. `0x5FD4` 의 `lea $62BC.l, a2` 자리를 그대로 대신한다.
 
     UI 텍스트는 예외 없이 `lea <문자열>, a1` + `jsr $5F60` 으로 그려진다. 그래서
@@ -261,11 +263,19 @@ def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
     """
     SAVE, REST = 0xFF9E, 0x79FF                   # d0-d7/a0/a3-a6 (a1·a2 제외)
     body = bytearray()
+    # 마커 두 개. 0x02 는 **같은 기록을 쓰되 페이지·타일을 상태바용으로 덮는다.**
+    # 기록 색인이 1바이트(최대 256개)라 이름표 사본을 위해 기록을 78개 더 만들 수
+    # 없었다. 마커를 하나 더 두는 쪽이 싸다.
     body += w(0x0C11) + w(UI_MARKER)              # cmpi.b #$01, (a1)
+    body += w(0x6700) + w(0x000A)                 # beq.w .marked — cmpi(4)+bne(4) 를 건너
+    #                                              (분기 기준이 PC+2 라 변위는 10)
+    body += w(0x0C11) + w(BAR_MARKER)             # cmpi.b #$02, (a1)
     body += w(0x6600) + w(0x0000)                 # bne.w .plain
     bne_at = len(body) - 2
 
-    body += w(0x48E7) + w(SAVE)                   # movem.l d0-d7/a0/a3-a6, -(a7)
+    body += w(0x48E7) + w(SAVE)                   # movem.l d0-d7/a0/a3-a6, -(a7)  .marked
+    body += w(0x1A11)                             # move.b (a1), d5   마커
+    body += w(0x5305)                             # subq.b #1, d5     0 = 보통, 1 = 상태바
     body += w(0x7000)                             # moveq #0, d0
     body += w(0x1029) + w(0x0001)                 # move.b 1(a1), d0    k
     body += w(0x0C40) + w(nrec)                   # cmpi.w #nrec, d0
@@ -278,9 +288,14 @@ def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
     body += lea_abs(uitbl, 0)                     # lea UITBL, a0
     body += w(0xD0C0)                             # adda.w d0, a0
     body += w(0x7C00)                             # moveq #0, d6
-    body += w(0x1C18)                             # move.b (a0)+, d6    플래그
+    body += w(0x1C18)                             # move.b (a0)+, d6    페이지
     body += w(0x7200)                             # moveq #0, d1
     body += w(0x1218)                             # move.b (a0)+, d1    타일 번호
+    if bar_page:                                  # 상태바면 페이지·타일을 덮는다
+        body += w(0x4A05)                         # tst.b d5
+        body += w(0x6700) + w(0x0008)             # beq.w .keep — moveq(2)+move.w(4) 를 건너
+        body += w(0x7C00 | bar_page)              # moveq #page, d6
+        body += w(0x323C) + w(bar_tile)           # move.w #tile, d1
     body += w(0xEB49)                             # lsl.w #5, d1        x32 = VRAM 주소
     body += w(0x7E00)                             # moveq #0, d7
     body += w(0x1E18)                             # move.b (a0)+, d7    N

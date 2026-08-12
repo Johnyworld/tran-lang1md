@@ -47,8 +47,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from asm import UI_MARKER, build_uploader_labels, build_uploader_msg  # noqa: E402
+from asm import UI_MARKER, BAR_MARKER  # noqa: E402
+from asm import build_uploader_labels, build_uploader_msg  # noqa: E402
 from asm import build_uploader_ui, build_uploader_res  # noqa: E402
+from asm import build_uploader_block  # noqa: E402
 from chain import parse_chain  # noqa: E402
 from events import e82c_sites  # noqa: E402
 import menu  # noqa: E402
@@ -68,10 +70,12 @@ UI_TSV = Path("translation/ui.tsv")
 ROM_SIZE = 0x100000
 UPLOADER_AT, UPLOADER2_AT, UI_UPLOADER_AT = 0x80000, 0x80200, 0x80700
 LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
+NAMEBAR_AT = 0x81800     # 아래 상태바용 이름표 사본 (페이지 6)
 UISTR_AT, UITBL_AT, ALTTBL_AT = 0x82000, 0x83000, 0x8C000
 CLSB_AT = 0x8D000        # 전직 후보용 클래스표 사본
 TITLE_AT, TITLE_UP_AT = 0x8E000, 0x80D00   # 선택 창 제목 타일 + 업로더
 RESTBL_AT, BATTLE_AT = 0x8F000, 0x94000   # 리소스 패치 표 / 전투씬 라벨 타일
+DEPLOY_AT, DEPLOY_UP_AT = 0x95000, 0x80E00   # 출전 준비 라벨 타일 + 업로더 2개
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -141,12 +145,20 @@ CAND_SITE = 0x151FE       # 후보를 그리는 lea 즉치 (0x151FC) — 이 자
 #   192..197  이름 6        198..205  클래스명 8 (위치 코드)
 #   206..220  팝업 단문 15   221..244  용병 클래스 어휘 24 (페이지 1)
 #   245..250  상태창 라벨 6  251..255  여유
-PAGES = {"merc": (1, 221), "cand": (2, 214), "cond": (3, 192), "stage": (4, 232),
-         "panel": (5, 245)}
+#   6 아래 상태바 이름  타일 124..127 — 대사 이름판(192..197)과 같이 보이므로 따로.
+#                     덤프 11장 전부에서 108/109/114/119..122/124..127 이 비어 있고
+#                     이름은 최대 4음절이라 4칸으로 충분하다.
+# (번호, 시작 타일, 재매핑할 코드 목록 이름)
+PAGES = {"merc": (1, 221, "body"), "cand": (2, 214, "body"), "cond": (3, 192, "body"),
+         "stage": (4, 232, "body"), "panel": (5, 245, "body"), "bar": (6, 124, "name")}
 # 프롤로그 화면 세 문자열은 **각자 자기 페이지**를 쓴다. 화면 단위 합집합으로
 # 묶었더니 스테이지 1 이 64/64 로 꽉 차서 나머지 스테이지의 전문(4~5줄)이 들어갈
 # 자리가 없었다. 문자열마다 타일 구간을 따로 주면 예산이 셋으로 쪼개진다.
 SCREEN_PAGE = {"prologue": (0, SLOT_BASE, 64), "cond": (3, 192, 40), "stage": (4, 232, 24)}
+# 아래 상태바(0x00F9BE / 0x00FA6C, `$5F94` 로 그린다)는 대사 이름판과 같은 화면에
+# 보이므로 이름표를 **사본**으로 따로 준다. 4칸(타일 124..127)이면 충분하다.
+NAMEPTR_BAR = (0x00F9BE, 0x00FA6C)
+BAR_CELLS = 4
 ALT_BASE = 221            # (호환용 — 페이지 1 의 시작 타일)
 BG, INK, OUTLINE = 13, 15, 14
 
@@ -321,7 +333,8 @@ def encode(text: str, slots: dict[str, int]) -> bytes:
 
 
 # ------------------------------------------------------------------ 이름판
-def build_names(g: Glyphs, recs: list[tuple[int, list[str], int]]) -> tuple[bytes, bytes, int]:
+def build_names(g: Glyphs,
+                recs: list[tuple[int, list[str], int]]) -> tuple[bytes, bytes, bytes, int]:
     """이름 문자열표 + 글리프 ID 표. 둘 다 원본과 같은 16B/엔트리.
 
     원본 표(0x2AE64, 16B x 78)를 건드리지 않는 이유: 같은 표를 유닛 목록 창처럼
@@ -339,7 +352,7 @@ def build_names(g: Glyphs, recs: list[tuple[int, list[str], int]]) -> tuple[byte
     """
     ko = load_tsv(NAMES_TSV, 0, 2, 3)
     n = 78
-    strs, idtbl = bytearray(), bytearray()
+    strs, idtbl, bar = bytearray(), bytearray(), bytearray()
     for k in range(n):
         name = ko.get(str(k), "")
         cells, ids, chars = bytearray(), [], []
@@ -363,7 +376,14 @@ def build_names(g: Glyphs, recs: list[tuple[int, list[str], int]]) -> tuple[byte
             rec += bytes([gid >> 7, gid & 0x7F])
         strs += entry.ljust(16, b"\x00")
         idtbl += rec.ljust(16, b"\x00")
-    return bytes(strs), bytes(idtbl), n
+
+        # 아래 상태바용 사본 — 기록은 **위와 같은 것을 쓰고** 마커만 0x02 로 둔다.
+        # 업로더가 마커 0x02 를 보면 페이지·타일을 상태바용(6 / 124)으로 덮는다.
+        # 기록 색인이 1바이트(최대 256개)라 78개를 더 만들 자리가 없었다.
+        if len(ids) > BAR_CELLS:
+            raise SystemExit(f"이름 {k} {name!r} 이 상태바 {BAR_CELLS}칸을 넘는다")
+        bar += (bytes([BAR_MARKER, len(recs) - 1]) + bytes(cells)).ljust(16, b"\x00")
+    return bytes(strs), bytes(idtbl), bytes(bar), n
 
 
 # ------------------------------------------------------------------ UI 텍스트
@@ -424,7 +444,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
                 for ch in ui.get((field, k), ""):
                     if ch not in ASCII_OK and ch not in merc:
                         merc.append(ch)
-            pidx, pbase = PAGES["merc"]
+            pidx, pbase, _ = PAGES["merc"]
             if pbase + len(merc) > 256:
                 raise SystemExit(f"용병 어휘 {len(merc)}자가 페이지 타일 "
                                  f"{256 - pbase}칸에 안 들어간다")
@@ -522,7 +542,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
             for ch in strd[a].replace("\\n", "\n"):
                 if ch not in ASCII_OK and ch != "\n" and ch not in vocab:
                     vocab.append(ch)
-        ppage, pbase = PAGES["panel"]
+        ppage, pbase, _ = PAGES["panel"]
         if pbase + len(vocab) > 256:
             raise SystemExit(f"상태창 라벨 어휘 {len(vocab)}자가 페이지 타일 "
                              f"{256 - pbase}칸을 넘는다")
@@ -571,7 +591,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
         for ch in ui.get(("class", k), ""):
             if ch not in ASCII_OK and ch not in cvocab:
                 cvocab.append(ch)
-    pidx, pbase = PAGES["cand"]
+    pidx, pbase, _ = PAGES["cand"]
     if pbase + len(cvocab) > 256:
         raise SystemExit(f"후보 어휘 {len(cvocab)}자가 페이지 타일 "
                          f"{256 - pbase}칸에 안 들어간다")
@@ -712,7 +732,7 @@ def main() -> None:
     # 글리프 기록표는 이름·UI·프롤로그가 함께 쓴다. UI 업로더가 k 로 색인한다.
     # (타일 번호, 글리프 문자들, 대체 코드 페이지 여부)
     recs: list[tuple[int, list[str], int]] = []
-    namestr, nameids, name_n = build_names(g, recs)
+    namestr, nameids, namebar, name_n = build_names(g, recs)
     chains, chain_log = build_chains(rom, src, g)
     uistr, ui_log = build_ui(rom, src, g, recs)
     # 메뉴는 폰트가 아니라 미리 그려둔 그래픽이다. 글리프 풀과 타일맵 서술자를
@@ -745,11 +765,26 @@ def main() -> None:
                          f"{n}타일 ({at:06X})")
     title_log.append(f"  훅 {menu.GRAPHLOAD_TAIL:06X} (그래픽 로더 꼬리) -> "
                      f"{TITLE_UP_AT:06X}")
+    # 출전 준비 라벨 — 타일 소유 리소스를 못 갈랐으므로 **그리기 직전**에 올린다.
+    deploy, deploy_log = menu.build_deploy_labels()
+    place(rom, DEPLOY_AT, deploy, "출전 준비 라벨 타일")
+    want_draw = b"\x4e\xb9" + menu.TILEMAP.to_bytes(4, "big")
+    for i, (site, base, _row) in enumerate(menu.DEPLOY_SITES):
+        assert rom[site:site + 6] == want_draw, f"{site:06X} 가 jsr $5CDC 아님"
+        code = build_uploader_block(src=DEPLOY_AT + i * 16 * 32, dst=base * 32,
+                                    tiles=16, call_first=menu.TILEMAP)
+        at = DEPLOY_UP_AT + i * 0x80
+        place(rom, at, code, f"출전 준비 라벨 업로더 {i}")
+        rom[site:site + 6] = b"\x4e\xb9" + at.to_bytes(4, "big")
+        deploy_log.append(f"  훅 {site:06X} -> {at:06X} (타일 {base}.. 16개)")
+
     menu_log += (["  -- 선택 창 제목 (풀 0x81)"] + title_log
-                 + ["  -- 전투씬 라벨 (풀 0x7E)"] + battle_log)
+                 + ["  -- 전투씬 라벨 (풀 0x7E)"] + battle_log
+                 + ["  -- 출전 준비 라벨 (그리기 직전 업로드)"] + deploy_log)
 
     place(rom, NAMESTR_AT, namestr, "이름 문자열표")
     place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")
+    place(rom, NAMEBAR_AT, namebar, "상태바 이름표")
     place(rom, UISTR_AT, uistr, "UI 문자열표")
     place(rom, CHAIN_AT, chains, "대사 체인")
     place(rom, LABEL_AT, make_labels(), "승리/패배 라벨")
@@ -779,6 +814,10 @@ def main() -> None:
         assert int.from_bytes(rom[imm:imm + 4], "big") == NAMETBL_ORIG, \
             f"{imm:06X} 가 이름표 즉치 아님"
         rom[imm:imm + 4] = NAMESTR_AT.to_bytes(4, "big")
+    for imm in NAMEPTR_BAR:              # 아래 상태바는 사본으로 (타일 124..127)
+        assert int.from_bytes(rom[imm:imm + 4], "big") == NAMETBL_ORIG, \
+            f"{imm:06X} 가 이름표 즉치 아님"
+        rom[imm:imm + 4] = NAMEBAR_AT.to_bytes(4, "big")
 
     # 코드 -> 타일 매핑은 전 화면 공통이므로 한 번만
     for i, c in enumerate(CODES):
@@ -836,17 +875,19 @@ def main() -> None:
     # 대체 코드 페이지들 — 원본 표를 복사하고 본문 코드만 다른 타일로 돌린다.
     # 그 페이지를 지정한 기록을 쓰는 문자열만 이렇게 그려지므로 남은 일본어는 무사하다.
     pages = bytearray()
-    for name, (idx, base) in sorted(PAGES.items(), key=lambda kv: kv[1][0]):
+    for name, (idx, base, which) in sorted(PAGES.items(), key=lambda kv: kv[1][0]):
         assert len(pages) == (idx - 1) * 256, f"페이지 {name} 번호가 어긋난다"
         tbl = bytearray(rom[TABLE_AT:TABLE_AT + 256])
-        for i, c in enumerate(CODES):
+        for i, c in enumerate(CODES if which == "body" else NAME_CODES):
             if base + i < 256:
                 tbl[c] = base + i
         pages += tbl
     place(rom, ALTTBL_AT, bytes(pages), "대체 코드 페이지")
 
+    bar_page, bar_base, _ = PAGES["bar"]
     code3 = build_uploader_ui(kfont=KFONT_AT, uitbl=UITBL_AT, nrec=len(recs),
-                              stride=UI_REC, table_at=TABLE_AT, alt_table=ALTTBL_AT)
+                              stride=UI_REC, table_at=TABLE_AT, alt_table=ALTTBL_AT,
+                              bar_page=bar_page, bar_tile=bar_base)
     place(rom, UI_UPLOADER_AT, code3, "UI 업로더")
     rom[UI_HOOK:UI_HOOK + 6] = b"\x4e\xb9" + UI_UPLOADER_AT.to_bytes(4, "big")
 

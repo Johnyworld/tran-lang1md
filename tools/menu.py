@@ -93,6 +93,17 @@ BATTLE_RES, BATTLE_VRAM = 0x7E, 0xB100       # 리소스 0x7E -> VRAM 0xB100 (0x
 BATTLE_PLATE = 2                             # 판 내부 배경 색
 BATTLE_BOX = (4, 76, 4, 19)                  # x0, x1, y0, y1 (글자를 지우고 그릴 범위)
 BATTLE_DUMP = Path("work/Mega Drive/korom_debug-vdp-vram-20260812-130157.bin")
+
+# ---------------------------------------------------------------- 출전 준비 라벨
+# `指揮官選択`(타일 256) / `位置選択`(타일 272). 서술자 `0x30F70`(8x2) 하나를 두 호출이
+# 베이스만 바꿔 쓴다. 타일 256..287 이 어느 리소스 소유인지 정적으로 못 갈랐다
+# (리소스 3 과 0x82 가 둘 다 VRAM 0x2000 에 올라오고 둘 다 압축이다). 그래서 로드
+# 시점이 아니라 **그리기 직전**(`jsr $5CDC` 자리)에 올린다 — 소유권을 몰라도 된다.
+DEPLOY_SITES = ((0x11136, 256, 0), (0x1118E, 272, 1))    # (호출 자리, 베이스 타일, ko 행)
+DEPLOY_W, DEPLOY_H = 8, 2
+DEPLOY_DUMP = Path("work/Mega Drive/korom_debug-vdp-vram-20260812-130320.bin")
+DEPLOY_BG = 13                               # 창 내부 색
+TILEMAP = 0x5CDC
 GRAPHLOAD = 0x53B4
 
 
@@ -340,6 +351,52 @@ def build_battle_labels() -> tuple[bytes, list[str]]:
                         out.append((hi << 4) | lo)
     log.append(f"  타일 {len(out) // 32}개 -> 리소스 {BATTLE_RES:02X} 로드 시 "
                f"VRAM {BATTLE_VRAM:04X}")
+    return bytes(out), log
+
+
+def build_deploy_labels() -> tuple[bytes, list[str]]:
+    """출전 준비 라벨 2개. 원본 타일에서 글자만 지우고 한글을 그린다.
+
+    반환 순서는 `DEPLOY_SITES` 순서이고, 각 라벨은 16타일이다.
+    """
+    ko, log = load_ko(), []
+    font, gmap = LABEL_BIN.read_bytes(), json.loads(LABEL_MAP.read_text())
+    vram = DEPLOY_DUMP.read_bytes()
+    out = bytearray()
+    for site, base, row in DEPLOY_SITES:
+        px = [[DEPLOY_BG] * (DEPLOY_W * 8) for _ in range(DEPLOY_H * 8)]
+        text = ko.get(("deploy", row))
+        if not text:
+            for r in range(DEPLOY_H):        # 번역 없으면 원본 그대로
+                for c in range(DEPLOY_W):
+                    b = (base + r * DEPLOY_W + c) * 32
+                    for y in range(8):
+                        for i in range(4):
+                            byte = vram[b + y * 4 + i]
+                            px[r * 8 + y][c * 8 + i * 2] = byte >> 4
+                            px[r * 8 + y][c * 8 + i * 2 + 1] = byte & 15
+            log.append(f"  {site:06X} 타일 {base}..{base + 15}  번역 없음 — 원본 유지")
+        else:
+            if len(text) * 16 > DEPLOY_W * 8:
+                raise SystemExit(f"출전 준비 라벨 {text!r} 이 {DEPLOY_W * 8}px 를 넘는다")
+            ox = (DEPLOY_W * 8 - len(text) * 16) // 2
+            for i, ch in enumerate(text):
+                if ch not in gmap:
+                    raise SystemExit(f"둥근모꼴에 글리프 없음: {ch!r}")
+                o = gmap[ch] * 32
+                for y in range(16):
+                    bits = (font[o + y * 2] << 8) | font[o + y * 2 + 1]
+                    for x in range(16):
+                        if bits >> (15 - x) & 1:
+                            px[y][ox + i * 16 + x] = INK
+            log.append(f"  {site:06X} 타일 {base}..{base + 15}  {text}")
+        for r in range(DEPLOY_H):
+            for c in range(DEPLOY_W):
+                for y in range(8):
+                    for i in range(4):
+                        hi = px[r * 8 + y][c * 8 + i * 2]
+                        lo = px[r * 8 + y][c * 8 + i * 2 + 1]
+                        out.append((hi << 4) | lo)
     return bytes(out), log
 
 

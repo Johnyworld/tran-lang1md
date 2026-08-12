@@ -25,6 +25,7 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 | `tools/build_all.py` | 한글화 롬 빌드 → `work/korom_all.md` |
 | `tools/menu.py` | 메뉴 그래픽 — 글리프 풀 재배치 + `$5CDC` 타일맵 서술자 재작성 |
 | `tools/uiscan.py` | 남은 일본어 UI 문자열 전수 조사 (lea 즉치 + 창 레코드 + 표) |
+| `tools/tilescan.py` | 타일맵 라벨 전수 조사 (`$5CDC` 호출 61곳) |
 | `tools/debug_rom.py` | 테스트용 — 아군을 강하게 → `work/korom_debug.md` |
 | `tools/release_check.py` | 배포판 검사 — 번역 아닌 변경이 남았는지 (`docs/RELEASE.md`) |
 | `tools/chain.py` | 본편 대사 체인 파서 (앵커 하나 = 대화 한 덩이) |
