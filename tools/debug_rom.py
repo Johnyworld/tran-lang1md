@@ -47,7 +47,7 @@ ALLY = range(1, 34)              # 광 진영 계열
 FOE = range(34, 63)              # 암 진영 계열
 OFF = {"MP": 4, "AT": 6, "DF": 8, "MV": 0xA, "CMD": 0x70}
 
-BOOST = {"MP": 99, "AT": 99, "DF": 99, "MV": 10, "CMD": 8}
+BOOST = {"MP": 99, "AT": 99, "DF": 99, "MV": 40, "CMD": 8}
 WEAKEN = {"AT": 1, "DF": 1}
 EXP_OFF, EXP_FAST = 0x7C, 0          # 문턱 = 값 x 8 -> 0 이면 한 마리로 레벨업
 # 전직 레벨 조건. `cmpi.b #$A, $8(a1)` 의 즉치 바이트 한 개다.
