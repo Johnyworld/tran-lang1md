@@ -62,7 +62,8 @@ NAME_BASE, NAME_CELLS = 192, 6
 NAME_CODES = list(range(0x0E, 0x0E + NAME_CELLS))
 # UI 전용 저바이트 코드 23개 -> 타일 198.. (클래스명 같은 '한 번에 하나' 필드용)
 UI_CODES = list(range(0x02, 0x0D)) + list(range(0x14, 0x20))
-UI_BASE, UI_STRIDE, UI_REC = 198, 16, 128   # 기록 128B = 공유 어휘 63자까지
+UI_BASE, UI_STRIDE, UI_REC = 198, 16, 136   # 기록 136B = 글리프 67자까지
+#                                            (프롤로그 화면 합집합 64자가 들어가야 한다)
 SYS_OFF = 8               # 팝업 단문은 클래스명 뒤 칸을 쓴다 (동시에 보여도 안 겹치게)
 UI_FIELDS = {                     # 필드 -> (원본 표, 엔트리 수, 칸 수, 배정 방식)
     "magic": (0x2B9AC, 14, 8, "shared"),
@@ -76,7 +77,9 @@ KINDS = ["stage", "prologue", "cond"]          # 그려지는 순서
 LABEL_DST, LABEL_TILES, LABEL_Y = 522 * 32, 20, 4
 LABEL_TOP, LABEL_BOTTOM = "승리", "패배"
 FROM_VRAM = {"。": 129, "「": 130, "」": 131, "、": 132, "・": 133}  # 게임 폰트의 가나 블록
-ASCII_OK = set(" 1234567890.,()-!?" "ABCDEFGHIJKLMNOPQRSTUVWXYZ")  # 게임 ASCII 폰트로 그린다
+# 게임 ASCII 폰트는 타일 0..95 = 코드 0x20..0x7F 라 소문자도 있다 (Yes/No 용)
+ASCII_OK = set(" 1234567890.,()-!?:/" "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                "abcdefghijklmnopqrstuvwxyz")
 
 
 PLACED: list[tuple[int, int, str]] = []
@@ -306,7 +309,9 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[
     for ln in UI_TSV.read_text().rstrip("\n").split("\n")[1:]:
         c = ln.split("\t")
         if len(c) >= 4 and c[3]:
-            ui[(c[0], int(c[1], 16) if c[0] == "system" else int(c[1]))] = c[3]
+            # system·str 은 인덱스 대신 롬 주소를 키로 쓴다
+            base = 16 if c[0] in ("system", "str") else 10
+            ui[(c[0], int(c[1], base))] = c[3]
 
     recs: list[tuple[int, list[str]]] = []      # (타일 번호, 글리프 문자들)
     strs, log, body_off, at = bytearray(), [], 0, {}
@@ -365,7 +370,8 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[
         ko = sysd[rec_at].replace("\\n", "\n")
         ptr_at = rec_at + 8
         ptr = int.from_bytes(src[ptr_at:ptr_at + 4], "big")
-        assert 0x30000 <= ptr < 0x32000, f"{rec_at:06X}: 창 포인터가 이상하다"
+        # 세이브 확인 창(0x000282)처럼 레코드가 롬 앞쪽에 있는 것도 있다.
+        assert 0x200 <= ptr < 0x40000, f"{rec_at:06X}: 창 포인터가 이상하다"
         chars = [ch for ch in ko if ch not in ASCII_OK and ch != "\n"]
         if len(chars) > len(UI_CODES) - SYS_OFF:
             raise SystemExit(f"단문 {rec_at:06X} {ko!r} 이 팝업 칸 "
@@ -389,6 +395,47 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[
     log.append(f"  system            {done}개 / 팝업 칸 {len(UI_CODES) - SYS_OFF}개 "
                f"(타일 {sysbase}..{UI_BASE + len(UI_CODES) - 1})")
 
+    # 코드가 `lea` 로 직접 싣는 낱개 문자열. 표도 창 레코드도 아니다.
+    # `0x30A92` = 전투 중 승리조건 창의 머리글 `しょうり` / `はいぼく` 가 이것이고,
+    # **조건문보다 먼저** 그려진다. 조건문이 본문 슬롯(128..191)에 한글을 올리므로
+    # 머리글이 그 범위를 쓰면 이미 그린 글자가 조건문 글리프로 변한다.
+    # 그래서 팝업 칸(206..220)을 쓴다 — 팝업과 이 창은 동시에 뜨지 않는다.
+    strd = {addr: ko for (field, addr), ko in ui.items() if field == "str"}
+    for addr in sorted(strd):
+        ko = strd[addr].replace("\\n", "\n")
+        chars = [ch for ch in ko if ch not in ASCII_OK and ch != "\n"]
+        if len(chars) > len(UI_CODES) - SYS_OFF:
+            raise SystemExit(f"낱개 문자열 {addr:06X} {ko!r} 이 팝업 칸을 넘는다")
+        rk = len(recs)
+        recs.append((sysbase, chars))
+        code_of = {ch: UI_CODES[SYS_OFF + i] for i, ch in enumerate(chars)}
+        out = bytearray([UI_MARKER, rk])
+        for ch in ko:
+            out += b"\x0d\x0d" if ch == "\n" else \
+                bytes([ord(ch) if ch in ASCII_OK else code_of[ch]])
+        out += b"\xff"
+        at_str = UISTR_AT + len(strs)
+        strs += out
+        if len(strs) & 1:
+            strs += b"\x00"
+        sites = lea_sites(src, addr)
+        if not sites:
+            raise SystemExit(f"낱개 문자열 {addr:06X} 를 싣는 lea 를 못 찾았다")
+        for p in sites:
+            rom[p:p + 4] = at_str.to_bytes(4, "big")
+        log.append(f"  str    {addr:06X} -> {at_str:06X}  lea {len(sites)}곳  {ko!r}")
+
+    log.append(f"  본문 슬롯 {body_off}/{len(CODES)} 사용 (공유 어휘) / "
+               f"이름칸 코드 {len(UI_CODES)}개는 클래스명용")
+    return bytes(strs), recs, log
+
+
+def bake_records(recs: list[tuple[int, list[str]]], g: Glyphs) -> bytes:
+    """글리프 기록표 — `[타일][N][ID x N]`, 엔트리 `UI_REC` 바이트 고정.
+
+    프롤로그 화면 기록까지 다 모인 뒤에 굽는다. UI 업로더가 `k` 를 `mulu #stride`
+    로 색인하므로 엔트리 길이는 고정이어야 한다.
+    """
     for _, chars in recs:
         for ch in chars:
             g.add(ch)
@@ -400,9 +447,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[
         if len(rec) > UI_REC:
             raise SystemExit(f"글리프 기록이 {UI_REC}바이트를 넘는다 ({len(chars)}자)")
         tbl += rec.ljust(UI_REC, b"\x00")
-    log.append(f"  본문 슬롯 {body_off}/{len(CODES)} 사용 (공유 어휘) / "
-               f"이름칸 코드 {len(UI_CODES)}개는 클래스명용")
-    return bytes(strs), bytes(tbl), log
+    return bytes(tbl)
 
 
 # ------------------------------------------------------------------ 본편 대사
@@ -492,7 +537,7 @@ def main() -> None:
 
     namestr, nameids, name_n = build_names(g)
     chains, chain_log = build_chains(rom, src, g)
-    uistr, uitbl, ui_log = build_ui(rom, src, g)
+    uistr, recs, ui_log = build_ui(rom, src, g)
     # 메뉴는 폰트가 아니라 미리 그려둔 그래픽이다. 글리프 풀과 타일맵 서술자를
     # 우리가 다시 쓰므로 위의 글리프 테이블·코드표와 아무것도 공유하지 않는다.
     menu_log = menu.build(rom, src)
@@ -500,10 +545,8 @@ def main() -> None:
     place(rom, NAMESTR_AT, namestr, "이름 문자열표")
     place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")
     place(rom, UISTR_AT, uistr, "UI 문자열표")
-    place(rom, UITBL_AT, uitbl, "UI 글리프기록표")
     place(rom, CHAIN_AT, chains, "대사 체인")
     place(rom, LABEL_AT, make_labels(), "승리/패배 라벨")
-    place(rom, KFONT_AT, g.table(), "글리프 테이블")   # 글리프는 모두 모인 뒤에 굽는다
 
     # 프롤로그 훅
     want = b"\x4e\xb9" + STRDRAW.to_bytes(4, "big")
@@ -527,15 +570,6 @@ def main() -> None:
         f"{NAMEPTR_IMM:06X} 가 이름표 즉치 아님"
     rom[NAMEPTR_IMM:NAMEPTR_IMM + 4] = NAMESTR_AT.to_bytes(4, "big")
 
-    # UI 훅 — lea $62BC.l, a2 (6B) 자리를 jsr (6B) 로. 문자열이 자기 글리프를 들고
-    # 오므로 그리기 지점마다 훅을 걸 필요가 없다.
-    want3 = b"\x45\xf9" + TABLE_AT.to_bytes(4, "big")
-    assert rom[UI_HOOK:UI_HOOK + 6] == want3, f"{UI_HOOK:06X} 가 lea ${TABLE_AT:X},a2 아님"
-    code3 = build_uploader_ui(kfont=KFONT_AT, uitbl=UITBL_AT, nrec=len(uitbl) // UI_REC,
-                              stride=UI_REC, table_at=TABLE_AT)
-    place(rom, UI_UPLOADER_AT, code3, "UI 업로더")
-    rom[UI_HOOK:UI_HOOK + 6] = b"\x4e\xb9" + UI_UPLOADER_AT.to_bytes(4, "big")
-
     # 코드 -> 타일 매핑은 전 화면 공통이므로 한 번만
     for i, c in enumerate(CODES):
         rom[TABLE_AT + c] = SLOT_BASE + i
@@ -544,7 +578,16 @@ def main() -> None:
     for i, c in enumerate(UI_CODES):
         rom[TABLE_AT + c] = UI_BASE + i
 
-    # 프롤로그 화면 — 한 화면 세 문자열이 슬롯을 공유한다
+    # 프롤로그 화면 — 세 문자열이 **같은 기록 하나**를 공유한다
+    #
+    # 처음에는 첫 문자열만 `[0xFE][N][ID x N]` 헤더를 달고 프롤로그 렌더러의 첫
+    # draw(0x18D12)에 걸린 훅이 올렸다. 그 훅을 지나지 않는 경로가 있어서 깨졌다 —
+    # 전투 중 승리조건 창(0x10C36)이 같은 표를 읽어 `jsr $5F60` 으로 그리는데,
+    # 헤더가 그대로 글자로 찍히고 슬롯에는 앞 대사의 글리프가 남아 있었다.
+    #
+    # 그래서 UI 문자열과 같은 방식으로 바꿨다. 훅이 `$5F60` 안(0x5FD4)에 있으므로
+    # **어느 경로로 그려도** 문자열이 자기 글리프를 들고 온다. 세 문자열이 한 화면에
+    # 동시에 보이니 기록은 화면 단위 합집합 하나를 공유한다(순서에 안 깨진다).
     at = TEXT_AT
     print(f"{'st':>3}  {'글리프':>5}  {'바이트':>6}   위치")
     over = []
@@ -553,15 +596,32 @@ def main() -> None:
         slots = assign([texts[k] for k in KINDS])
         if len(slots) > len(CODES):
             over.append((s, len(slots)))
+        rk = len(recs)
+        recs.append((SLOT_BASE, list(slots)))
         start, total = at, 0
-        for i, k in enumerate(KINDS):
-            blob = (g.header(slots) if i == 0 else b"") + encode(texts[k], slots) + b"\xff"
+        for k in KINDS:
+            blob = bytes([UI_MARKER, rk]) + encode(texts[k], slots) + b"\xff"
             at = place(rom, at, blob, f"화면 {k}-{s:02d}") + 2
             t = TABLES[k]
             rom[t + (s - 1) * 4:t + (s - 1) * 4 + 4] = (at - len(blob) - 2).to_bytes(4, "big")
             total += len(blob)
         mark = "✗" if len(slots) > len(CODES) else " "
         print(f"{s:3d}  {len(slots):3d}/{len(CODES)}{mark} {total:6d}   {start:06X}")
+
+    # 기록표는 프롤로그 화면까지 다 모인 뒤에 굽는다. 글리프 테이블은 이미 위에서
+    # 구웠지만 프롤로그 글리프는 main 진입부에서 g.add 로 넣어 뒀으므로 문제없다.
+    uitbl = bake_records(recs, g)
+    place(rom, UITBL_AT, uitbl, "UI 글리프기록표")
+    place(rom, KFONT_AT, g.table(), "글리프 테이블")   # 글리프는 모두 모인 뒤에 굽는다
+
+    # UI 훅 — lea $62BC.l, a2 (6B) 자리를 jsr (6B) 로. 문자열이 자기 글리프를 들고
+    # 오므로 그리기 지점마다 훅을 걸 필요가 없다.
+    want3 = b"\x45\xf9" + TABLE_AT.to_bytes(4, "big")
+    assert rom[UI_HOOK:UI_HOOK + 6] == want3, f"{UI_HOOK:06X} 가 lea ${TABLE_AT:X},a2 아님"
+    code3 = build_uploader_ui(kfont=KFONT_AT, uitbl=UITBL_AT, nrec=len(recs),
+                              stride=UI_REC, table_at=TABLE_AT)
+    place(rom, UI_UPLOADER_AT, code3, "UI 업로더")
+    rom[UI_HOOK:UI_HOOK + 6] = b"\x4e\xb9" + UI_UPLOADER_AT.to_bytes(4, "big")
 
     rom[0x1A4:0x1A8] = (ROM_SIZE - 1).to_bytes(4, "big")
     rom[0x18E] = rom[0x18F] = 0
