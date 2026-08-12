@@ -105,18 +105,24 @@ DEPLOY_DUMP = Path("work/Mega Drive/korom_debug-vdp-vram-20260812-130320.bin")
 DEPLOY_BG = 13                               # 창 내부 색
 TILEMAP = 0x5CDC
 
-# ---------------------------------------------------------------- 공격 대상 라벨
-# `攻擊先選択`. 창 레코드도 서술자도 아니고 **코드가 네임테이블에 직접 쓴다**
-# (`0x0D0AA`: 주소 0xDC38 부터 타일 362 를 1씩 증가시키며 10칸 x 2줄).
-# 그래서 tilescan(=$5CDC 호출 훑기)에 안 걸렸다. 실기 스크린샷으로 잡았고
-# VRAM 덤프의 네임테이블에서 타일 362..381 임을 확정했다.
+# -------------------------------------------------------------- 대상 선택 라벨 4개
+# 정보창 우하단의 `移動先選択` / `攻擊先選択` / `移動できません` / `攻擊できません`.
+# 창 레코드도 서술자도 아니라 **코드가 네임테이블에 직접 쓴다** (`0x0D0AA`: 주소
+# 0xDC38 부터 타일 362 를 1씩 증가시키며 10칸 x 2줄). 그래서 tilescan(=$5CDC 호출
+# 훑기)에 안 걸렸고 실기 스크린샷으로 잡았다.
 #
-# 타일 소유 리소스를 모르므로(같은 VRAM 0x2000 대역에 리소스 3/0x82 가 올라온다)
-# 위치선택과 같이 **그리기 직후**에 올린다 — `jsr $4A74`(DMA 목록 플러시) 자리를 훅.
-ATTACK_BASE, ATTACK_W, ATTACK_H = 362, 10, 2
-ATTACK_HOOK, ATTACK_FLUSH = 0xD0D6, 0x4A74
-ATTACK_BG = 13
-ATTACK_DUMP = Path("work/Mega Drive/korom_debug-vdp-vram-20260812-211918.bin")
+# 처음엔 그리기 직후(`jsr $4A74` 자리)를 훅해 20타일을 올렸다. 그런데 이동 모드
+# 스크린샷에서 일본어가 그대로였다 — **네 라벨이 같은 타일 362..381 을 돌려쓰고
+# 게임이 모드마다 픽셀을 갈아 올린다.** 두 덤프의 네임테이블이 똑같이 362..381 인데
+# 픽셀만 다른 것이 근거다.
+#
+# 그 픽셀 출처를 덤프 -> 롬 바이트 검색으로 찾았다. **리소스 0x83** (표 0x3A610,
+# `0x60EEE` = `0001 50 00` 비압축 80타일) 안에 20타일씩 4개가 나란히 있다. 그래서
+# 훅을 걷고 **롬 데이터를 제자리에서 갈아치운다** — 올리는 경로가 무엇이든 덮인다.
+TARGET_RES_DATA = 0x60EF2        # 리소스 0x83 헤더(0x60EEE) + 4
+TARGET_W, TARGET_H, TARGET_N = 10, 2, 4
+TARGET_STRIDE = TARGET_W * TARGET_H * 32     # 20타일 = 0x280
+ATTACK_BG = 13                   # 배경 13 / 글자 15 (원본 데이터 실측)
 GRAPHLOAD = 0x53B4
 
 
@@ -413,27 +419,24 @@ def build_deploy_labels() -> tuple[bytes, list[str]]:
     return bytes(out), log
 
 
-def build_attack_label() -> tuple[bytes, list[str]]:
-    """공격 대상 라벨 20타일. 원본 픽셀에서 글자를 지우고 한글을 그린다."""
+def build_target_labels(src: bytes) -> tuple[list[tuple[int, bytes]], list[str]]:
+    """대상 선택 라벨 4개. 리소스 0x83 안 20타일 블록을 제자리에 갈아 끼운다.
+
+    반환은 `[(롬 주소, 640바이트), ...]` — 훅이 없으므로 빌더가 그대로 쓴다.
+    """
     ko, log = load_ko(), []
     font, gmap = LABEL_BIN.read_bytes(), json.loads(LABEL_MAP.read_text())
-    vram = ATTACK_DUMP.read_bytes()
-    W, H = ATTACK_W * 8, ATTACK_H * 8
-    px = [[ATTACK_BG] * W for _ in range(H)]
-    text = ko.get(("attack", 0))
-    if not text:
-        for r in range(ATTACK_H):
-            for c in range(ATTACK_W):
-                b = (ATTACK_BASE + r * ATTACK_W + c) * 32
-                for y in range(8):
-                    for i in range(4):
-                        byte = vram[b + y * 4 + i]
-                        px[r * 8 + y][c * 8 + i * 2] = byte >> 4
-                        px[r * 8 + y][c * 8 + i * 2 + 1] = byte & 15
-        log.append("  번역 없음 — 원본 유지")
-    else:
+    W, H = TARGET_W * 8, TARGET_H * 8
+    out = []
+    for blk in range(TARGET_N):
+        at = TARGET_RES_DATA + blk * TARGET_STRIDE
+        text = ko.get(("target", blk))
+        if not text:
+            log.append(f"  {at:06X} 블록 {blk}  번역 없음 — 원본 유지")
+            continue
         if len(text) * 16 > W:
-            raise SystemExit(f"공격 대상 라벨 {text!r} 이 {W}px 를 넘는다")
+            raise SystemExit(f"대상 선택 라벨 {text!r} 이 {W}px 를 넘는다")
+        px = [[ATTACK_BG] * W for _ in range(H)]
         ox = (W - len(text) * 16) // 2
         for i, ch in enumerate(text):
             if ch == " ":
@@ -446,16 +449,18 @@ def build_attack_label() -> tuple[bytes, list[str]]:
                 for x in range(16):
                     if bits >> (15 - x) & 1:
                         px[y][ox + i * 16 + x] = INK
-        log.append(f"  타일 {ATTACK_BASE}..{ATTACK_BASE + ATTACK_W * ATTACK_H - 1}  {text}")
-    out = bytearray()
-    for r in range(ATTACK_H):
-        for c in range(ATTACK_W):
-            for y in range(8):
-                for i in range(4):
-                    hi = px[r * 8 + y][c * 8 + i * 2]
-                    lo = px[r * 8 + y][c * 8 + i * 2 + 1]
-                    out.append((hi << 4) | lo)
-    return bytes(out), log
+        blob = bytearray()
+        for r in range(TARGET_H):
+            for c in range(TARGET_W):
+                for y in range(8):
+                    for i in range(4):
+                        hi = px[r * 8 + y][c * 8 + i * 2]
+                        lo = px[r * 8 + y][c * 8 + i * 2 + 1]
+                        blob.append((hi << 4) | lo)
+        assert len(blob) == TARGET_STRIDE
+        out.append((at, bytes(blob)))
+        log.append(f"  {at:06X} 블록 {blk}  {ko.get(('target', blk))}")
+    return out, log
 
 
 def plan(src: bytes) -> tuple[dict[int, dict], set[int]]:

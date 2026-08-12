@@ -76,7 +76,6 @@ CLSB_AT = 0x8D000        # 전직 후보용 클래스표 사본
 TITLE_AT, TITLE_UP_AT = 0x8E000, 0x80D00   # 선택 창 제목 타일 + 업로더
 RESTBL_AT, BATTLE_AT = 0x8F000, 0x98000   # 리소스 패치 표 / 전투씬 라벨 타일
 DEPLOY_AT, DEPLOY_UP_AT = 0x99000, 0x80E00   # 출전 준비 라벨 타일 + 업로더 2개
-ATTACK_AT, ATTACK_UP_AT = 0x99800, 0x80F00   # 공격 대상 라벨 타일 + 업로더
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -787,22 +786,18 @@ def main() -> None:
         rom[site:site + 6] = b"\x4e\xb9" + at.to_bytes(4, "big")
         deploy_log.append(f"  훅 {site:06X} -> {at:06X} (타일 {base}.. 16개)")
 
-    # 공격 대상 라벨 — 코드가 네임테이블에 직접 쓰므로 그 직후(DMA 플러시)에 올린다.
-    attack, attack_log = menu.build_attack_label()
-    place(rom, ATTACK_AT, attack, "공격 대상 라벨 타일")
-    want_flush = b"\x4e\xb9" + menu.ATTACK_FLUSH.to_bytes(4, "big")
-    assert rom[menu.ATTACK_HOOK:menu.ATTACK_HOOK + 6] == want_flush, \
-        f"{menu.ATTACK_HOOK:06X} 가 jsr ${menu.ATTACK_FLUSH:X} 아님"
-    acode = build_uploader_block(src=ATTACK_AT, dst=menu.ATTACK_BASE * 32,
-                                tiles=len(attack) // 32, call_first=menu.ATTACK_FLUSH)
-    place(rom, ATTACK_UP_AT, acode, "공격 대상 라벨 업로더")
-    rom[menu.ATTACK_HOOK:menu.ATTACK_HOOK + 6] = b"\x4e\xb9" + ATTACK_UP_AT.to_bytes(4, "big")
-    attack_log.append(f"  훅 {menu.ATTACK_HOOK:06X} -> {ATTACK_UP_AT:06X}")
+    # 대상 선택 라벨 4개 — 리소스 0x83 의 픽셀을 제자리에서 갈아 끼운다. 훅 없음.
+    # 넷이 같은 타일 362..381 을 돌려쓰므로 데이터를 갈아야 모드마다 다 덮인다.
+    targets, attack_log = menu.build_target_labels(src)
+    for at, blob in targets:
+        assert rom[at:at + len(blob)] == src[at:at + len(blob)], \
+            f"{at:06X} 가 이미 다른 패치에 쓰이고 있다"
+        rom[at:at + len(blob)] = blob
 
     menu_log += (["  -- 선택 창 제목 (풀 0x81)"] + title_log
                  + ["  -- 전투씬 라벨 (풀 0x7E)"] + battle_log
                  + ["  -- 출전 준비 라벨 (그리기 직전 업로드)"] + deploy_log
-                 + ["  -- 공격 대상 라벨"] + attack_log)
+                 + ["  -- 대상 선택 라벨 (리소스 0x83 데이터 교체)"] + attack_log)
 
     place(rom, NAMESTR_AT, namestr, "이름 문자열표")
     place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")
