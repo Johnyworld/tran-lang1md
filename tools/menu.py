@@ -104,6 +104,19 @@ DEPLOY_W, DEPLOY_H = 8, 2
 DEPLOY_DUMP = Path("work/Mega Drive/korom_debug-vdp-vram-20260812-130320.bin")
 DEPLOY_BG = 13                               # 창 내부 색
 TILEMAP = 0x5CDC
+
+# ---------------------------------------------------------------- 공격 대상 라벨
+# `攻擊先選択`. 창 레코드도 서술자도 아니고 **코드가 네임테이블에 직접 쓴다**
+# (`0x0D0AA`: 주소 0xDC38 부터 타일 362 를 1씩 증가시키며 10칸 x 2줄).
+# 그래서 tilescan(=$5CDC 호출 훑기)에 안 걸렸다. 실기 스크린샷으로 잡았고
+# VRAM 덤프의 네임테이블에서 타일 362..381 임을 확정했다.
+#
+# 타일 소유 리소스를 모르므로(같은 VRAM 0x2000 대역에 리소스 3/0x82 가 올라온다)
+# 위치선택과 같이 **그리기 직후**에 올린다 — `jsr $4A74`(DMA 목록 플러시) 자리를 훅.
+ATTACK_BASE, ATTACK_W, ATTACK_H = 362, 10, 2
+ATTACK_HOOK, ATTACK_FLUSH = 0xD0D6, 0x4A74
+ATTACK_BG = 13
+ATTACK_DUMP = Path("work/Mega Drive/korom_debug-vdp-vram-20260812-211918.bin")
 GRAPHLOAD = 0x53B4
 
 
@@ -397,6 +410,51 @@ def build_deploy_labels() -> tuple[bytes, list[str]]:
                         hi = px[r * 8 + y][c * 8 + i * 2]
                         lo = px[r * 8 + y][c * 8 + i * 2 + 1]
                         out.append((hi << 4) | lo)
+    return bytes(out), log
+
+
+def build_attack_label() -> tuple[bytes, list[str]]:
+    """공격 대상 라벨 20타일. 원본 픽셀에서 글자를 지우고 한글을 그린다."""
+    ko, log = load_ko(), []
+    font, gmap = LABEL_BIN.read_bytes(), json.loads(LABEL_MAP.read_text())
+    vram = ATTACK_DUMP.read_bytes()
+    W, H = ATTACK_W * 8, ATTACK_H * 8
+    px = [[ATTACK_BG] * W for _ in range(H)]
+    text = ko.get(("attack", 0))
+    if not text:
+        for r in range(ATTACK_H):
+            for c in range(ATTACK_W):
+                b = (ATTACK_BASE + r * ATTACK_W + c) * 32
+                for y in range(8):
+                    for i in range(4):
+                        byte = vram[b + y * 4 + i]
+                        px[r * 8 + y][c * 8 + i * 2] = byte >> 4
+                        px[r * 8 + y][c * 8 + i * 2 + 1] = byte & 15
+        log.append("  번역 없음 — 원본 유지")
+    else:
+        if len(text) * 16 > W:
+            raise SystemExit(f"공격 대상 라벨 {text!r} 이 {W}px 를 넘는다")
+        ox = (W - len(text) * 16) // 2
+        for i, ch in enumerate(text):
+            if ch == " ":
+                continue
+            if ch not in gmap:
+                raise SystemExit(f"둥근모꼴에 글리프 없음: {ch!r}")
+            o = gmap[ch] * 32
+            for y in range(16):
+                bits = (font[o + y * 2] << 8) | font[o + y * 2 + 1]
+                for x in range(16):
+                    if bits >> (15 - x) & 1:
+                        px[y][ox + i * 16 + x] = INK
+        log.append(f"  타일 {ATTACK_BASE}..{ATTACK_BASE + ATTACK_W * ATTACK_H - 1}  {text}")
+    out = bytearray()
+    for r in range(ATTACK_H):
+        for c in range(ATTACK_W):
+            for y in range(8):
+                for i in range(4):
+                    hi = px[r * 8 + y][c * 8 + i * 2]
+                    lo = px[r * 8 + y][c * 8 + i * 2 + 1]
+                    out.append((hi << 4) | lo)
     return bytes(out), log
 
 
