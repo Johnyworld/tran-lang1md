@@ -8,18 +8,21 @@ VRAM 슬롯을 채운다. 화면이 바뀔 때 달라지는 것은 타일의 **�
 타일·코드 배정
 --------------
 ```
-타일 128..184  본문 슬롯        코드 0x7F..0xA0 / 0xE0..0xFD (64개 중 앞쪽)
+타일 128..191  본문 슬롯        코드 0x7F..0xA0 / 0xE0..0xFD (64개) — 대사·프롤로그
    128..158     마법 공유 어휘   목록이 여러 줄 동시에 보이므로 표 전체가 공유
    159..184     아이템 공유 어휘
-   185..190     상태창 라벨      지휘범위 / 수정 (STR_POLICY = body)
 타일 192..197  이름 6칸         코드 0x0E..0x13 (위치 고정)
 타일 198..205  클래스명 8칸     코드 0x02..0x09 (위치 고정)
 타일 206..220  팝업 단문 15칸   코드 0x0A..0x0C / 0x14..0x1F
+                               + 상태창 라벨(지휘범위·수정)이 앞 6칸을 나눠 쓴다
 ```
 `$62BC` 는 코드 -> 타일 표이고 렌더러 `$5F60` 이 이것으로 타일을 고른다.
 배정을 가르는 기준은 **한 화면에 무엇이 같이 보이는가** 하나다. 같이 보이는 것은
 타일이 겹치면 안 되고(먼저 그린 글자가 나중 글리프로 변한다), 같이 안 보이는 것은
 얼마든지 돌려쓸 수 있다(다시 그릴 때 자기 글리프를 다시 올리므로 스스로 낫는다).
+
+**남은 일본어도 "같이 보이는 것"에 든다.** 본문 슬롯 128..191 은 게임의 가나 폰트
+자리이므로, 같은 화면에 원문 가나가 있으면 그 글자가 우리 글리프로 변한다.
 
 훅
 --
@@ -76,13 +79,17 @@ UI_CODES = list(range(0x02, 0x0D)) + list(range(0x14, 0x20))
 UI_BASE, UI_STRIDE, UI_REC = 198, 16, 136   # 기록 136B = 글리프 67자까지
 #                                            (프롤로그 화면 합집합 64자가 들어가야 한다)
 SYS_OFF = 8               # 팝업 단문은 클래스명 뒤 칸을 쓴다 (동시에 보여도 안 겹치게)
-# `lea` 로 오는 낱개 문자열의 슬롯 정책. 같이 보이는 것과 겹치지 않게 고른다.
-#   popup  팝업 칸(206..220) — 팝업과 동시에 뜨지 않는 것
-#   body   본문 여유 슬롯 — 상태창 라벨. 클래스명(198..205)·이름(192..197)·팝업과
-#          모두 떨어져 있어야 하는데 저바이트 코드가 다 찼다. 마법·아이템 공유
-#          어휘가 본문 57칸만 쓰므로 그 뒤를 쓴다. body 문자열끼리는 상태창에
-#          같이 보이므로 **기록 하나를 공유**한다.
-STR_POLICY = {0x30A92: "popup", 0x31564: "body", 0x3156C: "body"}
+# `lea` 로 오는 낱개 문자열의 슬롯 정책. 둘 다 팝업 칸(206..220)을 쓴다.
+#   popup   문자열마다 기록 하나 — 서로 동시에 뜨지 않는 것
+#   shared  이 정책끼리 기록 하나를 공유 — 상태창 라벨처럼 **같이 보이는** 것
+#
+# 라벨을 본문 여유 슬롯(185..190)에 넣었다가 실패했다. 본문 슬롯은 곧 **가나 폰트
+# 자리**이고, 상태창과 같이 보이는 지휘관 이름판이 원본 카타카나다. `ル`=185
+# `レ`=186 `ン`=189 이 우리 `지` `휘` `수` 로 변해 이름판이 `휘ディ수` 가 됐다.
+# 팝업 칸은 남은 일본어가 쓰지 않는 자리라(타일 206.. 은 히라가나 폰트 영역이지만
+# 이 화면에 히라가나가 없다) 안전하다. 팝업과는 겹치는데 서로 다시 그릴 때
+# 자기 글리프를 다시 올리므로 낫는다.
+STR_POLICY = {0x30A92: "popup", 0x31564: "shared", 0x3156C: "shared"}
 NAMEPTR_PANEL = (0x1257C, 0x1260E, 0x126A4)   # 유닛 상태창 3변형의 이름표 즉치
 #   목록 창(여러 이름이 동시에 보인다)은 건드리지 않는다 — 6칸을 돌려쓰므로 깨진다
 UI_FIELDS = {                     # 필드 -> (원본 표, 엔트리 수, 칸 수, 배정 방식)
@@ -430,27 +437,27 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
     #   0x30A92  승리조건 창 머리글. 조건문(본문 슬롯)보다 **먼저** 그려지므로
     #            본문 범위를 쓰면 이미 그린 글자가 조건문 글리프로 변한다 -> 팝업 칸
     #   0x31564  상태창 `しきはんい`, 0x3156C `しゅうせい`. 이름(192..197)·클래스명
-    #            (198..205)과 한 화면이고 팝업도 겹칠 수 있어 본문 여유 슬롯을 쓴다
+    #            (198..205)·지휘관 이름판(원본 가나 = 본문 슬롯)과 한 화면이라
+    #            팝업 칸에 둘이 기록을 공유한다 (STR_POLICY 주석 참고)
     strd = {addr: ko for (field, addr), ko in ui.items() if field == "str"}
-    body_strs = [a for a in sorted(strd) if STR_POLICY.get(a) == "body"]
-    body_rk, body_code = None, {}
-    if body_strs:
+    shared_strs = [a for a in sorted(strd) if STR_POLICY.get(a) == "shared"]
+    shared_rk, shared_code = None, {}
+    if shared_strs:
         vocab = []
-        for a in body_strs:
+        for a in shared_strs:
             for ch in strd[a].replace("\\n", "\n"):
                 if ch not in ASCII_OK and ch != "\n" and ch not in vocab:
                     vocab.append(ch)
-        if body_off + len(vocab) > len(CODES):
-            raise SystemExit(f"낱개 문자열 어휘 {len(vocab)}자가 본문 코드에 안 들어간다")
-        body_code = {ch: CODES[body_off + i] for i, ch in enumerate(vocab)}
-        body_rk = len(recs)
-        recs.append((SLOT_BASE + body_off, vocab))
-        body_off += len(vocab)
+        if len(vocab) > len(UI_CODES) - SYS_OFF:
+            raise SystemExit(f"낱개 문자열 공유 어휘 {len(vocab)}자가 팝업 칸을 넘는다")
+        shared_code = {ch: UI_CODES[SYS_OFF + i] for i, ch in enumerate(vocab)}
+        shared_rk = len(recs)
+        recs.append((sysbase, vocab))
     for addr in sorted(strd):
         ko = strd[addr].replace("\\n", "\n")
         chars = [ch for ch in ko if ch not in ASCII_OK and ch != "\n"]
-        if STR_POLICY.get(addr) == "body":
-            rk, code_of = body_rk, body_code
+        if STR_POLICY.get(addr) == "shared":
+            rk, code_of = shared_rk, shared_code
         else:
             if len(chars) > len(UI_CODES) - SYS_OFF:
                 raise SystemExit(f"낱개 문자열 {addr:06X} {ko!r} 이 팝업 칸을 넘는다")
