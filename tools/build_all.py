@@ -69,6 +69,7 @@ ROM_SIZE = 0x100000
 UPLOADER_AT, UPLOADER2_AT, UI_UPLOADER_AT = 0x80000, 0x80200, 0x80700
 LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
 UISTR_AT, UITBL_AT, ALTTBL_AT = 0x82000, 0x83000, 0x8A000
+CLSB_AT = 0x8B000        # 전직 후보용 클래스표 사본
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -95,8 +96,11 @@ SYS_OFF = 8               # 팝업 단문은 클래스명 뒤 칸을 쓴다 (동
 # 이 화면에 히라가나가 없다) 안전하다. 팝업과는 겹치는데 서로 다시 그릴 때
 # 자기 글리프를 다시 올리므로 낫는다.
 STR_POLICY = {0x30A92: "popup", 0x31564: "shared", 0x3156C: "shared"}
-NAMEPTR_PANEL = (0x1257C, 0x1260E, 0x126A4)   # 유닛 상태창 3변형의 이름표 즉치
-#   목록 창(여러 이름이 동시에 보인다)은 건드리지 않는다 — 6칸을 돌려쓰므로 깨진다
+# 이름이 **한 번에 하나만** 보이는 자리들. 여기만 우리 이름표로 돌린다.
+#   상태창 3변형 + 레벨업·전직 팝업 3개의 콜백 (0x151AC / 0x15218 / 0x1527A)
+# 출전 준비 화면 위쪽 지휘관 이름판처럼 여러 개가 동시에 보이는 자리는 건드리지
+# 않는다 — 우리 방식은 타일 192..197 을 돌려쓰므로 모두 마지막 이름으로 변한다.
+NAMEPTR_PANEL = (0x1257C, 0x1260E, 0x126A4, 0x151C2, 0x1522E, 0x15290)
 UI_FIELDS = {                     # 필드 -> (원본 표, 엔트리 수, 칸 수, 배정 방식)
     "magic": (0x2B9AC, 14, 8, "shared"),
     "item":  (0x2B8E4, 10, 8, "shared"),
@@ -111,10 +115,16 @@ UI_FIELDS = {                     # 필드 -> (원본 표, 엔트리 수, 칸 �
 # 가나 코드를 전역으로 훔치려 했으나 남은 대사 1026개가 가나 62종을 쓰고 있어
 # (`。` `「` 포함) 불가였다. 이 표에서만 본문 코드를 다른 타일로 돌린다.
 MERC_CLASSES = list(range(65, 73)) + list(range(75, 80))
-ALT_BASE = 212            # 대체 표에서 CODES[i] -> 타일 212+i (44칸)
-#   212..220 은 팝업 칸 꼬리, 221.. 은 히라가나 폰트 자리다. 이 화면에는 팝업도
-#   히라가나도 없다. 지휘관 이름판(원본 카타카나 = 타일 129..191)과 안 겹치는 것이
-#   핵심이다 — 본문 슬롯을 쓰면 그 이름판이 깨진다(실측).
+CAND_ROWS = range(1, 43)  # 전직 후보표에서 뜻이 있는 행 (지휘관 구간)
+CAND_TBL = 0x2BF2E        # 클래스 -> 후보 2개 (워드 x 2, 0xFFFF = 없음)
+CAND_SITE = 0x151FE       # 후보를 그리는 lea 즉치 (0x151FC) — 이 자리만 사본으로
+#
+# 코드 페이지. 기록의 첫 바이트가 페이지 번호이고 0 은 원본 표다.
+#   1 용병 클래스     타일 212.. — 출전 준비 화면 (이름 192 / 클래스 198 / 라벨 206)
+#   2 전직 후보 클래스 타일 214.. — 전직 팝업. 팝업 문장(206..)과 같이 보이므로
+#                     문장 음절 수만큼 비켜 둔다. 후보 2개가 어휘를 공유한다.
+PAGES = {"merc": (1, 212), "cand": (2, 214)}
+ALT_BASE = 212            # (호환용 — 페이지 1 의 시작 타일)
 BG, INK, OUTLINE = 13, 15, 14
 
 TABLES = {"stage": 0x38A38, "prologue": 0x38BF2, "cond": 0x3962E}
@@ -288,7 +298,7 @@ def encode(text: str, slots: dict[str, int]) -> bytes:
 
 
 # ------------------------------------------------------------------ 이름판
-def build_names(g: Glyphs, recs: list[tuple[int, list[str], bool]]) -> tuple[bytes, bytes, int]:
+def build_names(g: Glyphs, recs: list[tuple[int, list[str], int]]) -> tuple[bytes, bytes, int]:
     """이름 문자열표 + 글리프 ID 표. 둘 다 원본과 같은 16B/엔트리.
 
     원본 표(0x2AE64, 16B x 78)를 건드리지 않는 이유: 같은 표를 유닛 목록 창처럼
@@ -324,7 +334,7 @@ def build_names(g: Glyphs, recs: list[tuple[int, list[str], bool]]) -> tuple[byt
             raise SystemExit(f"이름 {k} {name!r} 이 {NAME_CELLS}칸을 넘는다")
         cells += b" " * (NAME_CELLS - len(cells)) + b"\xff"   # 남은 칸은 공백으로 지운다
         entry = bytes([UI_MARKER, len(recs)]) + bytes(cells)
-        recs.append((NAME_BASE, chars, False))
+        recs.append((NAME_BASE, chars, 0))
         rec = bytearray([len(ids)])
         for gid in ids:
             rec += bytes([gid >> 7, gid & 0x7F])
@@ -344,7 +354,7 @@ def lea_sites(rom: bytes, addr: int) -> list[int]:
 
 
 def build_ui(rom: bytearray, src: bytes, g: Glyphs,
-             recs: list[tuple[int, list[str], bool]]) -> tuple[bytes, list[str]]:
+             recs: list[tuple[int, list[str], int]]) -> tuple[bytes, list[str]]:
     """UI 문자열표를 우리 것으로 바꾼다. 반환값은 (문자열표, 글리프 기록표, 로그).
 
     엔트리가 `lsl.w #4` 로 색인돼 **16바이트 고정**이라 글리프 목록을 문자열에 담을
@@ -383,7 +393,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
                 raise SystemExit(f"{field}: 어휘 {len(vocab)}자가 본문 코드에 안 들어간다")
             cmap = {ch: CODES[body_off + i] for i, ch in enumerate(vocab)}
             shared_k = len(recs)
-            recs.append((SLOT_BASE + body_off, vocab, False))
+            recs.append((SLOT_BASE + body_off, vocab, 0))
             body_off += len(vocab)
         if field == "class":                      # 용병 클래스만 대체 페이지 공유
             merc: list[str] = []
@@ -391,14 +401,15 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
                 for ch in ui.get((field, k), ""):
                     if ch not in ASCII_OK and ch not in merc:
                         merc.append(ch)
-            if ALT_BASE + len(merc) > 256:
-                raise SystemExit(f"용병 어휘 {len(merc)}자가 대체 타일 "
-                                 f"{256 - ALT_BASE}칸에 안 들어간다")
+            pidx, pbase = PAGES["merc"]
+            if pbase + len(merc) > 256:
+                raise SystemExit(f"용병 어휘 {len(merc)}자가 페이지 타일 "
+                                 f"{256 - pbase}칸에 안 들어간다")
             merc_map = {ch: CODES[i] for i, ch in enumerate(merc)}
             merc_k = len(recs)
-            recs.append((ALT_BASE, merc, True))
-            log.append(f"  merc              어휘 {len(merc)}자 / 대체 페이지 "
-                       f"타일 {ALT_BASE}..{ALT_BASE + len(merc) - 1} / 클래스 "
+            recs.append((pbase, merc, pidx))
+            log.append(f"  merc              어휘 {len(merc)}자 / 페이지 {pidx} "
+                       f"타일 {pbase}..{pbase + len(merc) - 1} / 클래스 "
                        f"{len(MERC_CLASSES)}개")
         for k in range(n):
             ko = ui.get((field, k))
@@ -416,7 +427,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
                 if len(chars) > len(UI_CODES):
                     raise SystemExit(f"{field}[{k}] {ko!r} 이 이름칸 {len(UI_CODES)}개를 넘는다")
                 rk, code_of = len(recs), {ch: UI_CODES[i] for i, ch in enumerate(chars)}
-                recs.append((UI_BASE, chars, False))
+                recs.append((UI_BASE, chars, 0))
             entry = bytearray([UI_MARKER, rk])
             for i, ch in enumerate(ko):
                 entry.append(ord(ch) if ch in ASCII_OK else code_of[ch])
@@ -448,8 +459,13 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
         if len(chars) > len(UI_CODES) - SYS_OFF:
             raise SystemExit(f"단문 {rec_at:06X} {ko!r} 이 팝업 칸 "
                              f"{len(UI_CODES) - SYS_OFF}개를 넘는다")
+        # 전직 팝업은 후보 클래스(페이지 2, 타일 214..)와 한 화면이다. 문장이 그
+        # 타일까지 먹으면 후보 이름이 문장 글리프로 변한다.
+        if rec_at == 0x32A8E and sysbase + len(chars) > PAGES["cand"][1]:
+            raise SystemExit(f"전직 팝업 문장 {ko!r} 이 {len(chars)}자 — 후보 페이지 "
+                             f"타일 {PAGES['cand'][1]} 를 침범한다")
         rk = len(recs)
-        recs.append((sysbase, chars, False))
+        recs.append((sysbase, chars, 0))
         code_of = {ch: UI_CODES[SYS_OFF + i] for i, ch in enumerate(chars)}
         out = bytearray(src[ptr:ptr + 4]) + bytes([UI_MARKER, rk])
         for ch in ko:
@@ -487,7 +503,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
             raise SystemExit(f"낱개 문자열 공유 어휘 {len(vocab)}자가 팝업 칸을 넘는다")
         shared_code = {ch: UI_CODES[SYS_OFF + i] for i, ch in enumerate(vocab)}
         shared_rk = len(recs)
-        recs.append((sysbase, vocab, False))
+        recs.append((sysbase, vocab, 0))
     for addr in sorted(strd):
         ko = strd[addr].replace("\\n", "\n")
         chars = [ch for ch in ko if ch not in ASCII_OK and ch != "\n"]
@@ -497,7 +513,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
             if len(chars) > len(UI_CODES) - SYS_OFF:
                 raise SystemExit(f"낱개 문자열 {addr:06X} {ko!r} 이 팝업 칸을 넘는다")
             rk = len(recs)
-            recs.append((sysbase, chars, False))
+            recs.append((sysbase, chars, 0))
             code_of = {ch: UI_CODES[SYS_OFF + i] for i, ch in enumerate(chars)}
         out = bytearray([UI_MARKER, rk])
         for ch in ko:
@@ -515,23 +531,66 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs,
             rom[p:p + 4] = at_str.to_bytes(4, "big")
         log.append(f"  str    {addr:06X} -> {at_str:06X}  lea {len(sites)}곳  {ko!r}")
 
+    # 전직 팝업의 후보 클래스 — **두 개를 동시에** 그린다(0x151F8 의 dbra, 2회).
+    # 위치 코드로는 뒤 후보가 앞 후보를 덮으므로 클래스표 **사본**을 만들어 후보
+    # 어휘를 공유시키고, 후보를 그리는 lea 즉치 한 곳만 그 사본으로 돌린다.
+    # 다른 자리(상태창·전직 완료 팝업)는 한 번에 하나만 보이므로 원래 표를 쓴다.
+    cand = set()
+    for k in CAND_ROWS:
+        for i in range(2):
+            v = int.from_bytes(src[CAND_TBL + k * 4 + i * 2:CAND_TBL + k * 4 + i * 2 + 2], "big")
+            if v != 0xFFFF and 0 < v < 63:
+                cand.add(v)
+    cvocab: list[str] = []
+    for k in sorted(cand):
+        for ch in ui.get(("class", k), ""):
+            if ch not in ASCII_OK and ch not in cvocab:
+                cvocab.append(ch)
+    pidx, pbase = PAGES["cand"]
+    if pbase + len(cvocab) > 256:
+        raise SystemExit(f"후보 어휘 {len(cvocab)}자가 페이지 타일 "
+                         f"{256 - pbase}칸에 안 들어간다")
+    cmap2 = {ch: CODES[i] for i, ch in enumerate(cvocab)}
+    cand_k = len(recs)
+    recs.append((pbase, cvocab, pidx))
+    clsb, table, cells = bytearray(), UI_FIELDS["class"][0], UI_FIELDS["class"][2]
+    done = 0
+    for k in range(UI_FIELDS["class"][1]):
+        ko = ui.get(("class", k)) if k in cand else None
+        if not ko:            # 후보가 아닌 엔트리는 원문 그대로 — 그려질 일이 없고,
+            clsb += src[table + k * UI_STRIDE:table + (k + 1) * UI_STRIDE]
+            continue          # 만약 그려지면 일본어로 보여 바로 눈에 띈다
+        entry = bytearray([UI_MARKER, cand_k])
+        for ch in ko:
+            entry.append(ord(ch) if ch in ASCII_OK else cmap2[ch])
+        entry += b" " * (cells - len(ko)) + b"\xff"
+        clsb += entry.ljust(UI_STRIDE, b"\x00")
+        done += 1
+    at_clsb = place(rom, CLSB_AT, bytes(clsb), "전직 후보 클래스표") - len(clsb)
+    assert int.from_bytes(rom[CAND_SITE:CAND_SITE + 4], "big") == at["class"], \
+        f"{CAND_SITE:06X} 가 클래스표 즉치가 아니다"
+    rom[CAND_SITE:CAND_SITE + 4] = at_clsb.to_bytes(4, "big")
+    log.append(f"  cand   {table:06X} -> {at_clsb:06X}  {done}/{len(cand)} 후보 / "
+               f"어휘 {len(cvocab)}자 / 페이지 {pidx} 타일 "
+               f"{pbase}..{pbase + len(cvocab) - 1}")
+
     log.append(f"  본문 슬롯 {body_off}/{len(CODES)} 사용 (공유 어휘) / "
                f"이름칸 코드 {len(UI_CODES)}개는 클래스명용")
     return bytes(strs), log
 
 
-def bake_records(recs: list[tuple[int, list[str], bool]], g: Glyphs) -> bytes:
+def bake_records(recs: list[tuple[int, list[str], int]], g: Glyphs) -> bytes:
     """글리프 기록표 — `[타일][N][ID x N]`, 엔트리 `UI_REC` 바이트 고정.
 
     프롤로그 화면 기록까지 다 모인 뒤에 굽는다. UI 업로더가 `k` 를 `mulu #stride`
     로 색인하므로 엔트리 길이는 고정이어야 한다.
     """
-    for _, chars, _alt in recs:
+    for _, chars, _page in recs:
         for ch in chars:
             g.add(ch)
     tbl = bytearray()
-    for base, chars, alt in recs:
-        rec = bytearray([1 if alt else 0, base, len(chars)])
+    for base, chars, page in recs:
+        rec = bytearray([page, base, len(chars)])
         for ch in chars:
             rec += bytes([g.gid[ch] >> 7, g.gid[ch] & 0x7F])
         if len(rec) > UI_REC:
@@ -627,7 +686,7 @@ def main() -> None:
 
     # 글리프 기록표는 이름·UI·프롤로그가 함께 쓴다. UI 업로더가 k 로 색인한다.
     # (타일 번호, 글리프 문자들, 대체 코드 페이지 여부)
-    recs: list[tuple[int, list[str], bool]] = []
+    recs: list[tuple[int, list[str], int]] = []
     namestr, nameids, name_n = build_names(g, recs)
     chains, chain_log = build_chains(rom, src, g)
     uistr, ui_log = build_ui(rom, src, g, recs)
@@ -694,7 +753,7 @@ def main() -> None:
         if len(slots) > len(CODES):
             over.append((s, len(slots)))
         rk = len(recs)
-        recs.append((SLOT_BASE, list(slots), False))
+        recs.append((SLOT_BASE, list(slots), 0))
         start, total = at, 0
         for k in KINDS:
             blob = bytes([UI_MARKER, rk]) + encode(texts[k], slots) + b"\xff"
@@ -715,13 +774,17 @@ def main() -> None:
     # 오므로 그리기 지점마다 훅을 걸 필요가 없다.
     want3 = b"\x45\xf9" + TABLE_AT.to_bytes(4, "big")
     assert rom[UI_HOOK:UI_HOOK + 6] == want3, f"{UI_HOOK:06X} 가 lea ${TABLE_AT:X},a2 아님"
-    # 대체 코드 페이지 — 원본 표를 복사하고 본문 코드만 다른 타일로 돌린다.
-    # 플래그가 선 기록을 쓰는 문자열만 이 표로 그려지므로 남은 일본어는 무사하다.
-    alt = bytearray(rom[TABLE_AT:TABLE_AT + 256])
-    for i, c in enumerate(CODES):
-        if ALT_BASE + i < 256:
-            alt[c] = ALT_BASE + i
-    place(rom, ALTTBL_AT, bytes(alt), "대체 코드 페이지")
+    # 대체 코드 페이지들 — 원본 표를 복사하고 본문 코드만 다른 타일로 돌린다.
+    # 그 페이지를 지정한 기록을 쓰는 문자열만 이렇게 그려지므로 남은 일본어는 무사하다.
+    pages = bytearray()
+    for name, (idx, base) in sorted(PAGES.items(), key=lambda kv: kv[1][0]):
+        assert len(pages) == (idx - 1) * 256, f"페이지 {name} 번호가 어긋난다"
+        tbl = bytearray(rom[TABLE_AT:TABLE_AT + 256])
+        for i, c in enumerate(CODES):
+            if base + i < 256:
+                tbl[c] = base + i
+        pages += tbl
+    place(rom, ALTTBL_AT, bytes(pages), "대체 코드 페이지")
 
     code3 = build_uploader_ui(kfont=KFONT_AT, uitbl=UITBL_AT, nrec=len(recs),
                               stride=UI_REC, table_at=TABLE_AT, alt_table=ALTTBL_AT)

@@ -235,8 +235,8 @@ def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
 
     ```
     문자열 앞머리  [0x01][k]                 k 번째 글리프 기록을 올려라
-    글리프 기록    [플래그][타일][N][ID x N]   uitbl + k*stride, ID 는 7비트 두 바이트
-    플래그 bit0    코드->타일 표를 alt_table 로 갈아 끼운다
+    글리프 기록    [페이지][타일][N][ID x N]   uitbl + k*stride, ID 는 7비트 두 바이트
+    페이지        0 = 원본 표, n = alt_table + (n-1)*256
     ```
 
     두 바이트만 붙이는 간접 방식인 이유: 클래스명 같은 표는 `lsl.w #4` 로 색인해
@@ -291,13 +291,16 @@ def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
     body[beq_at:beq_at + 2] = w(len(body) - (beq_at - 2) - 2)       # .done
     body += w(0x46DF)                             # move.w (a7)+, sr
 
-    # 코드 페이지 선택 — a2 는 movem 밖이라 그대로 남는다
+    # 코드 페이지 선택 — a2 는 movem 밖이라 그대로 남는다.
+    # 플래그는 **페이지 번호**다: 0 = 원본 표, n = alt_table + (n-1)*256.
     body += lea_abs(table_at, 2)                  # lea $62BC.l, a2
     if alt_table:
-        body += w(0x0806) + w(0x0000)             # btst #0, d6
-        body += w(0x6700) + w(0x0008)             # beq.w .keep — lea 6바이트를 건너뛴다
-        #                                          (분기 기준이 PC+2 라 변위는 8)
+        body += w(0x4A06)                         # tst.b d6
+        body += w(0x6700) + w(0x000C)             # beq.w .keep (아래 4명령 = 12바이트)
+        body += w(0x5306)                         # subq.b #1, d6
+        body += w(0xE14E)                         # lsl.w #8, d6      페이지 x 256
         body += lea_abs(alt_table, 2)             # lea ALT.l, a2
+        body += w(0xD4C6)                         # adda.w d6, a2
     body += w(0x6000) + w(0x0000)                 # bra.w .restore_end
     bra_at = len(body) - 2
 
