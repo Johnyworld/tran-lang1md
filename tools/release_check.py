@@ -14,7 +14,10 @@ NOTE_AT, DEBUG_NOTE = 0x1C8, b"DEBUG"
 ROM_SIZE = 0x100000
 # 디버그 롬이 코드에 손대는 자리. 표 비교로는 안 잡히므로 따로 적는다.
 # 늘어나면 여기 한 줄 추가 — docs/RELEASE.md 와 짝을 맞춘다.
-CODE_SITES = ((0xD4D5, "전직 레벨 조건 (cmpi.b #$A, $8(a1))"),)
+# (주소, 길이, 설명) — 길이로 비교한다. 한 바이트만 보면 4바이트 즉치의 변경을
+# 놓친다 (0x31020 -> 0x32A8E 는 앞 두 바이트가 같다. 실제로 한 번 놓쳤다).
+CODE_SITES = ((0xD4D5, 1, "전직 레벨 조건 (cmpi.b #$A, $8(a1))"),
+              (0x11E8E, 4, "아이템없음 팝업 레코드 즉치 (--force-popup)"))
 
 
 def main() -> None:
@@ -36,10 +39,10 @@ def main() -> None:
     if not ok:
         fails.append("디버그 표식")
 
-    for at, what in CODE_SITES:
-        ok = rom[at] == src[at]
+    for at, n, what in CODE_SITES:
+        ok = rom[at:at + n] == src[at:at + n]
         print(f"{'OK ' if ok else '✗  '} 코드 {at:06X}  {what}  "
-              f"{src[at]:02X} / 지금 {rom[at]:02X}")
+              f"{src[at:at+n].hex()} / 지금 {rom[at:at+n].hex()}")
         if not ok:
             fails.append(f"코드 {at:06X}")
 

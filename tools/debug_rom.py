@@ -53,6 +53,14 @@ EXP_OFF, EXP_FAST = 0x7C, 0          # 문턱 = 값 x 8 -> 0 이면 한 마리�
 # 전직 레벨 조건. `cmpi.b #$A, $8(a1)` 의 즉치 바이트 한 개다.
 CC_IMM, CC_ORIG, CC_DEBUG = 0xD4D5, 0x0A, 0x01
 
+# 팝업 강제 표시. 레벨업·전직 창은 씬 디스패처($F07C) 뒤의 시퀀스에서 뜨는데 그
+# 진입을 정적으로 못 잡았다(전투 중 레벨업은 팝업 없이 레벨만 오른다 — 실측).
+# 그래서 **쉽게 부를 수 있는 팝업의 레코드 즉치를 바꿔** 텍스트·레이아웃만 확인한다.
+#   트리거: 출전 준비 화면 -> 아이템 (가진 아이템이 없을 때)
+# 콜백($aeb8)은 그 자리에서 clr 되므로 이름·후보 클래스는 그려지지 않는다.
+POPUP_IMM, POPUP_ORIG = 0x11E8E, 0x31020        # move.l #$31020, $aeb2.w 의 즉치
+POPUPS = {"levelup": 0x32AF4, "classchange": 0x32A8E, "promote": 0x32ABE}
+
 IN, OUT = Path("work/korom_all.md"), Path("work/korom_debug.md")
 # 헤더 노트 필드(게임 동작과 무관)에 표식을 남긴다. 나중에 어느 파일이 무엇인지
 # 구분되고, `build_all.py --release` 와 `release_check.py` 가 이것을 거부한다.
@@ -68,6 +76,10 @@ def poke(rom: bytearray, cls: int, field: str, value: int) -> int:
 
 def main() -> None:
     weak = "--weak-enemy" in sys.argv
+    force = next((a.split("=", 1)[1] for a in sys.argv
+                  if a.startswith("--force-popup=")), None)
+    if force and force not in POPUPS:
+        raise SystemExit(f"--force-popup= 는 {'|'.join(POPUPS)} 중 하나")
     if not IN.exists():
         raise SystemExit(f"{IN} 가 없다 — 먼저 python3 tools/build_all.py")
     rom = bytearray(IN.read_bytes())
@@ -99,6 +111,13 @@ def main() -> None:
         print(f"  {field:3s} +{OFF[field]:02X}  "
               f"{int.from_bytes(IN.read_bytes()[q:q+2], 'big'):3d}"
               f" -> {int.from_bytes(rom[q:q+2], 'big'):3d}")
+
+    if force:
+        assert int.from_bytes(rom[POPUP_IMM:POPUP_IMM + 4], "big") == POPUP_ORIG, \
+            f"{POPUP_IMM:06X} 가 아이템없음 팝업 즉치가 아니다"
+        rom[POPUP_IMM:POPUP_IMM + 4] = POPUPS[force].to_bytes(4, "big")
+        print(f"팝업 강제 표시: 아이템없음 -> {force} ({POPUPS[force]:06X})  "
+              f"트리거 = 출전 준비 화면의 아이템")
 
     rom[NOTE_AT:NOTE_AT + len(NOTE)] = NOTE
     print(f"\n헤더 표식 {NOTE_AT:04X}: {NOTE.decode()}")
