@@ -71,7 +71,12 @@ UNTOUCHED = {0x030A1A}        # 문맥 미확인 — 서술자를 건드리지 �
 # 같은 방법). 그래서 리소스 로드 `jsr $53B4` 세 곳에 훅을 건다.
 TITLE_BASE_TILE = 448
 TITLE_OFF = 98                # 네 제목이 쓰는 오프셋 98..159 의 앞부터 쓴다
-TITLE_LOADS = (0x1181C, 0x18C9C, 0x19038)   # 리소스 0x81 을 올리는 세 자리
+TITLE_RES = 0x81              # 이 리소스가 올라올 때마다 우리 타일로 덮는다
+TITLE_VRAM = 0x3800           # 리소스 0x81 이 올라가는 VRAM 주소 (타일 448)
+# 예전에는 `move.w #$81,d1` 이 보이는 로드 지점 세 곳(0x1181C·0x18C9C·0x19038)에
+# 훅을 걸었다. 리소스 번호를 레지스터로 넘기는 자리를 놓치므로(출전 준비 화면에서
+# 지휘관선택이 원문으로 나왔다) 로더 꼬리 한 곳으로 옮겼다 — asm.build_uploader_res.
+GRAPHLOAD_TAIL = 0x53D2       # movem.l (a7)+, d1-d2/a1 + rts (6바이트)
 TITLE_RECS = (0x030FEE, 0x03104C, 0x0310A6, 0x038800)
 GRAPHLOAD = 0x53B4
 

@@ -48,7 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asm import UI_MARKER, build_uploader_labels, build_uploader_msg  # noqa: E402
-from asm import build_uploader_ui, build_uploader_block  # noqa: E402
+from asm import build_uploader_ui, build_uploader_res  # noqa: E402
 from chain import parse_chain  # noqa: E402
 from events import e82c_sites  # noqa: E402
 import menu  # noqa: E402
@@ -71,6 +71,7 @@ LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
 UISTR_AT, UITBL_AT, ALTTBL_AT = 0x82000, 0x83000, 0x8C000
 CLSB_AT = 0x8D000        # 전직 후보용 클래스표 사본
 TITLE_AT, TITLE_UP_AT = 0x8E000, 0x80D00   # 선택 창 제목 타일 + 업로더
+RESTBL_AT = 0x8F000      # 리소스 -> 타일 블록 패치 표
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -720,15 +721,26 @@ def main() -> None:
     # 선택 창 제목 — 압축 풀(리소스 0x81)이라 로드 직후 VRAM 을 덮는다.
     titles, title_log = menu.build_titles(rom, src)
     place(rom, TITLE_AT, titles, "선택 창 제목 타일")
-    tcode = build_uploader_block(
-        src=TITLE_AT, dst=(menu.TITLE_BASE_TILE + menu.TITLE_OFF) * 32,
-        tiles=len(titles) // 32, call_first=menu.GRAPHLOAD)
-    place(rom, TITLE_UP_AT, tcode, "제목 업로더")
-    want_load = b"\x4e\xb9" + menu.GRAPHLOAD.to_bytes(4, "big")
-    for site in menu.TITLE_LOADS:
-        assert rom[site:site + 6] == want_load, f"{site:06X} 가 jsr $53B4 아님"
-        rom[site:site + 6] = b"\x4e\xb9" + TITLE_UP_AT.to_bytes(4, "big")
-    title_log.append(f"  훅 {len(menu.TITLE_LOADS)}곳 (리소스 0x81 로드) -> "
+    # 리소스 패치 표 — [리소스.w][VRAM.w][타일수.w][원본.l] 10바이트 엔트리.
+    # 로더 꼬리 한 곳에 훅을 걸어 **어느 경로로 로드해도** 덮는다.
+    patches = [(menu.TITLE_RES,
+                menu.TITLE_VRAM + menu.TITLE_OFF * 32,
+                len(titles) // 32, TITLE_AT)]
+    tbl = b"".join(res.to_bytes(2, "big") + vram.to_bytes(2, "big")
+                   + n.to_bytes(2, "big") + at.to_bytes(4, "big")
+                   for res, vram, n, at in patches)
+    place(rom, RESTBL_AT, tbl, "리소스 패치 표")
+    tcode = build_uploader_res(table=RESTBL_AT, n=len(patches))
+    place(rom, TITLE_UP_AT, tcode, "리소스 업로더")
+    want_tail = b"\x4c\xdf\x02\x06\x4e\x75"        # movem.l (a7)+,d1-d2/a1 + rts
+    assert rom[menu.GRAPHLOAD_TAIL:menu.GRAPHLOAD_TAIL + 6] == want_tail, \
+        f"{menu.GRAPHLOAD_TAIL:06X} 가 로더 꼬리가 아니다"
+    rom[menu.GRAPHLOAD_TAIL:menu.GRAPHLOAD_TAIL + 6] = \
+        b"\x4e\xf9" + TITLE_UP_AT.to_bytes(4, "big")     # jmp 우리 루틴
+    for res, vram, n, at in patches:
+        title_log.append(f"  패치 리소스 {res:02X} -> VRAM {vram:04X} "
+                         f"{n}타일 ({at:06X})")
+    title_log.append(f"  훅 {menu.GRAPHLOAD_TAIL:06X} (그래픽 로더 꼬리) -> "
                      f"{TITLE_UP_AT:06X}")
     menu_log += ["  -- 선택 창 제목 (풀 0x81)"] + title_log
 

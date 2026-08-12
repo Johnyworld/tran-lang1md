@@ -445,3 +445,44 @@ def build_uploader_block(src: int, dst: int, tiles: int, call_first: int) -> byt
     body += w(0x4CDF) + w(0x0FFF)                 # movem.l (a7)+, d0-d7/a0-a3
     body += w(0x4E75)                             # rts
     return bytes(body)
+
+
+def build_uploader_res(table: int, n: int, entry: int = 10) -> bytes:
+    """그래픽 로드 직후 **리소스 번호를 보고** 타일 블록을 덮는다.
+
+    `0x53B4` 의 꼬리 `movem.l (a7)+, d1-d2/a1` + `rts` (6바이트) 자리를 대신한다.
+    그 자리에서 movem 이 d1 을 복원하므로 **d1 = 리소스 번호**다(진입 시 값).
+    호출 지점마다 훅을 걸면 리소스 번호를 레지스터로 넘기는 자리를 놓치는데,
+    여기 한 곳이면 **어느 경로로 로드해도** 걸린다.
+
+    패치 표 엔트리 10바이트: `[리소스.w][VRAM 주소.w][타일 수.w][원본 주소.l]`
+    """
+    body = bytearray()
+    body += w(0x4CDF) + w(0x0206)                 # movem.l (a7)+, d1-d2/a1  (훔친 것)
+    body += w(0x48E7) + w(0xFFF0)                 # movem.l d0-d7/a0-a3, -(a7)
+    body += w(0x40E7)                             # move.w sr, -(a7)
+    body += w(0x46FC) + w(0x2700)                 # move.w #$2700, sr
+    body += lea_abs(table, 0)                     # lea TABLE, a0
+    body += w(0x7E00 | (n - 1))                   # moveq #n-1, d7
+    outer = len(body)
+    body += w(0xB250)                             # cmp.w (a0), d1        리소스 일치?
+    body += w(0x6600) + w(0x0000)                 # bne.w .next
+    bne_at = len(body) - 2
+    body += w(0x3628) + w(0x0002)                 # move.w 2(a0), d3      VRAM 주소
+    body += w(0x3C28) + w(0x0004)                 # move.w 4(a0), d6      타일 수
+    body += w(0x5346)                             # subq.w #1, d6
+    body += w(0x2668) + w(0x0006)                 # movea.l 6(a0), a3     원본
+    body += lea_abs(VDP_DATA, 2)                  # lea (C00000).l, a2
+    inner = len(body)
+    body += vdp_set_write(0, 3)                   # d0 스크래치, d3 = VRAM 주소
+    body += w(0x249B) * 8                         # move.l (a3)+, (a2)    32바이트
+    body += w(0x0643) + w(0x0020)                 # addi.w #32, d3
+    body += w(0x51CE) + w((inner - (len(body) + 2)) & 0xFFFF)      # dbra d6, inner
+
+    body[bne_at:bne_at + 2] = w(len(body) - (bne_at - 2) - 2)      # .next
+    body += w(0x41E8) + w(entry)                  # lea entry(a0), a0
+    body += w(0x51CF) + w((outer - (len(body) + 2)) & 0xFFFF)      # dbra d7, outer
+    body += w(0x46DF)                             # move.w (a7)+, sr
+    body += w(0x4CDF) + w(0x0FFF)                 # movem.l (a7)+, d0-d7/a0-a3
+    body += w(0x4E75)                             # rts
+    return bytes(body)
