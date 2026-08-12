@@ -8,20 +8,31 @@ VRAM 슬롯을 채운다. 화면이 바뀔 때 달라지는 것은 타일의 **�
 타일·코드 배정
 --------------
 ```
-타일 128..191  본문 슬롯 64개   코드 0x7F..0xA0 / 0xE0..0xFD
-타일 192..197  이름판 슬롯 6개  코드 0x0E..0x13 (위치 고정)
+타일 128..184  본문 슬롯        코드 0x7F..0xA0 / 0xE0..0xFD (64개 중 앞쪽)
+   128..158     마법 공유 어휘   목록이 여러 줄 동시에 보이므로 표 전체가 공유
+   159..184     아이템 공유 어휘
+   185..190     상태창 라벨      지휘범위 / 수정 (STR_POLICY = body)
+타일 192..197  이름 6칸         코드 0x0E..0x13 (위치 고정)
+타일 198..205  클래스명 8칸     코드 0x02..0x09 (위치 고정)
+타일 206..220  팝업 단문 15칸   코드 0x0A..0x0C / 0x14..0x1F
 ```
 `$62BC` 는 코드 -> 타일 표이고 렌더러 `$5F60` 이 이것으로 타일을 고른다.
-프롤로그와 본편 대사가 같은 렌더러를 쓰므로 배정도 하나로 통한다.
+배정을 가르는 기준은 **한 화면에 무엇이 같이 보이는가** 하나다. 같이 보이는 것은
+타일이 겹치면 안 되고(먼저 그린 글자가 나중 글리프로 변한다), 같이 안 보이는 것은
+얼마든지 돌려쓸 수 있다(다시 그릴 때 자기 글리프를 다시 올리므로 스스로 낫는다).
 
-훅 두 군데
-----------
+훅
+--
 ```
-0x18D12  프롤로그 렌더러의 첫 draw   jsr $5F60 -> jsr 업로더(본문+라벨)
-0x157C8  이름판 렌더러의 $E818 저장  move.l a1,$E818 -> jsr 업로더(본문+이름)
-0x157D8  이름 문자열표 즉치          0x2AE64 -> 우리 표
+0x5FD4   lea $62BC,a2 -> jsr 업로더     $5F60 안. 문자열이 [0x01][k] 를 달고 있으면
+                                        그 기록의 글리프를 올린다. **경로 무관** —
+                                        UI·프롤로그·조건문·이름·상태창이 다 이것뿐
+0x18D12  jsr $5F60    -> jsr 업로더     프롤로그 첫 draw (승리/패배 라벨 업로드용)
+0x157C8  move.l a1,$E818 -> jsr 업로더  대사 본문 글리프 (0xFE 헤더)
+0x157D8 + 상태창 3곳   이름표 즉치      0x2AE64 -> 우리 표
 ```
-`0x157C8` 이 대사에서 유일한 훅으로 충분한 이유는 `asm.build_uploader_msg` 참고.
+그리기 지점마다 훅을 걸면 경로를 전부 찾아야 한다. 승리조건 창에서 그 대가를
+치렀고(STATUS 참고) 지금은 렌더러 안 한 곳으로 모았다.
 """
 import json
 import sys
@@ -50,7 +61,7 @@ ROM_SIZE = 0x100000
 UPLOADER_AT, UPLOADER2_AT, UI_UPLOADER_AT = 0x80000, 0x80200, 0x80700
 LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
 UISTR_AT, UITBL_AT = 0x82000, 0x83000
-KFONT_AT, TEXT_AT, CHAIN_AT = 0x88000, 0xA0000, 0xB0000
+KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
 MSG_HOOK, NAMEPTR_IMM, NAMETBL_ORIG = 0x157C8, 0x157D8, 0x2AE64
@@ -65,6 +76,15 @@ UI_CODES = list(range(0x02, 0x0D)) + list(range(0x14, 0x20))
 UI_BASE, UI_STRIDE, UI_REC = 198, 16, 136   # 기록 136B = 글리프 67자까지
 #                                            (프롤로그 화면 합집합 64자가 들어가야 한다)
 SYS_OFF = 8               # 팝업 단문은 클래스명 뒤 칸을 쓴다 (동시에 보여도 안 겹치게)
+# `lea` 로 오는 낱개 문자열의 슬롯 정책. 같이 보이는 것과 겹치지 않게 고른다.
+#   popup  팝업 칸(206..220) — 팝업과 동시에 뜨지 않는 것
+#   body   본문 여유 슬롯 — 상태창 라벨. 클래스명(198..205)·이름(192..197)·팝업과
+#          모두 떨어져 있어야 하는데 저바이트 코드가 다 찼다. 마법·아이템 공유
+#          어휘가 본문 57칸만 쓰므로 그 뒤를 쓴다. body 문자열끼리는 상태창에
+#          같이 보이므로 **기록 하나를 공유**한다.
+STR_POLICY = {0x30A92: "popup", 0x31564: "body", 0x3156C: "body"}
+NAMEPTR_PANEL = (0x1257C, 0x1260E, 0x126A4)   # 유닛 상태창 3변형의 이름표 즉치
+#   목록 창(여러 이름이 동시에 보인다)은 건드리지 않는다 — 6칸을 돌려쓰므로 깨진다
 UI_FIELDS = {                     # 필드 -> (원본 표, 엔트리 수, 칸 수, 배정 방식)
     "magic": (0x2B9AC, 14, 8, "shared"),
     "item":  (0x2B8E4, 10, 8, "shared"),
@@ -243,21 +263,28 @@ def encode(text: str, slots: dict[str, int]) -> bytes:
 
 
 # ------------------------------------------------------------------ 이름판
-def build_names(g: Glyphs) -> tuple[bytes, bytes, int]:
+def build_names(g: Glyphs, recs: list[tuple[int, list[str]]]) -> tuple[bytes, bytes, int]:
     """이름 문자열표 + 글리프 ID 표. 둘 다 원본과 같은 16B/엔트리.
 
-    원본 표(0x2AE64, 16B x 78)를 건드리지 않는 이유: 같은 표를 유닛 상태창 등
-    다른 UI 도 읽는다. 대신 이름판 렌더러가 보는 **포인터만** 우리 표로 돌린다.
+    원본 표(0x2AE64, 16B x 78)를 건드리지 않는 이유: 같은 표를 유닛 목록 창처럼
+    **여러 이름이 동시에 보이는** UI 도 읽는다. 그런 곳은 한 이름당 6칸을 돌려쓰는
+    이 방식으로는 안 되므로(마지막 이름으로 다 변한다) 원문 그대로 둔다.
+    우리 표로 돌리는 것은 이름이 한 번에 하나만 보이는 자리뿐이다.
 
     문자열은 **위치 코드**다 — k 번째 한글 칸은 항상 코드 `0x0E+k`. 업로더가
     그 이름의 글리프를 타일 192+k 에 올리므로 표에는 자리만 적으면 된다.
+
+    앞머리에 `[0x01][기록번호]` 를 단다. 대사 이름판은 `0x157C8` 훅이 `$E82A` 로
+    글리프를 올리지만, 유닛 상태창은 그 훅을 지나지 않는다. UI 마커를 달아 두면
+    `$5F60` 안의 훅(`0x5FD4`)이 **어느 경로에서든** 그 이름의 글리프를 올린다.
+    엔트리 16바이트에 2 + 6칸 + 종료자 = 9바이트라 자리가 남는다.
     """
     ko = load_tsv(NAMES_TSV, 0, 2, 3)
     n = 78
     strs, idtbl = bytearray(), bytearray()
     for k in range(n):
         name = ko.get(str(k), "")
-        cells, ids = bytearray(), []
+        cells, ids, chars = bytearray(), [], []
         for ch in name:
             if ch in ASCII_OK:
                 cells.append(ord(ch))
@@ -267,13 +294,16 @@ def build_names(g: Glyphs) -> tuple[bytes, bytes, int]:
                 cells.append(NAME_CODES[len(ids)])
                 g.add(ch)
                 ids.append(g.gid[ch])
+                chars.append(ch)
         if len(cells) > NAME_CELLS:
             raise SystemExit(f"이름 {k} {name!r} 이 {NAME_CELLS}칸을 넘는다")
         cells += b" " * (NAME_CELLS - len(cells)) + b"\xff"   # 남은 칸은 공백으로 지운다
+        entry = bytes([UI_MARKER, len(recs)]) + bytes(cells)
+        recs.append((NAME_BASE, chars))
         rec = bytearray([len(ids)])
         for gid in ids:
             rec += bytes([gid >> 7, gid & 0x7F])
-        strs += cells.ljust(16, b"\x00")
+        strs += entry.ljust(16, b"\x00")
         idtbl += rec.ljust(16, b"\x00")
     return bytes(strs), bytes(idtbl), n
 
@@ -288,7 +318,8 @@ def lea_sites(rom: bytes, addr: int) -> list[int]:
     return out
 
 
-def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[str]]:
+def build_ui(rom: bytearray, src: bytes, g: Glyphs,
+             recs: list[tuple[int, list[str]]]) -> tuple[bytes, list[str]]:
     """UI 문자열표를 우리 것으로 바꾼다. 반환값은 (문자열표, 글리프 기록표, 로그).
 
     엔트리가 `lsl.w #4` 로 색인돼 **16바이트 고정**이라 글리프 목록을 문자열에 담을
@@ -313,7 +344,6 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[
             base = 16 if c[0] in ("system", "str") else 10
             ui[(c[0], int(c[1], base))] = c[3]
 
-    recs: list[tuple[int, list[str]]] = []      # (타일 번호, 글리프 문자들)
     strs, log, body_off, at = bytearray(), [], 0, {}
     for field, (table, n, cells, mode) in UI_FIELDS.items():
         at[field] = UISTR_AT + len(strs)
@@ -396,19 +426,37 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[
                f"(타일 {sysbase}..{UI_BASE + len(UI_CODES) - 1})")
 
     # 코드가 `lea` 로 직접 싣는 낱개 문자열. 표도 창 레코드도 아니다.
-    # `0x30A92` = 전투 중 승리조건 창의 머리글 `しょうり` / `はいぼく` 가 이것이고,
-    # **조건문보다 먼저** 그려진다. 조건문이 본문 슬롯(128..191)에 한글을 올리므로
-    # 머리글이 그 범위를 쓰면 이미 그린 글자가 조건문 글리프로 변한다.
-    # 그래서 팝업 칸(206..220)을 쓴다 — 팝업과 이 창은 동시에 뜨지 않는다.
+    # 슬롯은 `STR_POLICY` 로 갈린다 — 같이 보이는 것과 겹치지 않아야 한다.
+    #   0x30A92  승리조건 창 머리글. 조건문(본문 슬롯)보다 **먼저** 그려지므로
+    #            본문 범위를 쓰면 이미 그린 글자가 조건문 글리프로 변한다 -> 팝업 칸
+    #   0x31564  상태창 `しきはんい`, 0x3156C `しゅうせい`. 이름(192..197)·클래스명
+    #            (198..205)과 한 화면이고 팝업도 겹칠 수 있어 본문 여유 슬롯을 쓴다
     strd = {addr: ko for (field, addr), ko in ui.items() if field == "str"}
+    body_strs = [a for a in sorted(strd) if STR_POLICY.get(a) == "body"]
+    body_rk, body_code = None, {}
+    if body_strs:
+        vocab = []
+        for a in body_strs:
+            for ch in strd[a].replace("\\n", "\n"):
+                if ch not in ASCII_OK and ch != "\n" and ch not in vocab:
+                    vocab.append(ch)
+        if body_off + len(vocab) > len(CODES):
+            raise SystemExit(f"낱개 문자열 어휘 {len(vocab)}자가 본문 코드에 안 들어간다")
+        body_code = {ch: CODES[body_off + i] for i, ch in enumerate(vocab)}
+        body_rk = len(recs)
+        recs.append((SLOT_BASE + body_off, vocab))
+        body_off += len(vocab)
     for addr in sorted(strd):
         ko = strd[addr].replace("\\n", "\n")
         chars = [ch for ch in ko if ch not in ASCII_OK and ch != "\n"]
-        if len(chars) > len(UI_CODES) - SYS_OFF:
-            raise SystemExit(f"낱개 문자열 {addr:06X} {ko!r} 이 팝업 칸을 넘는다")
-        rk = len(recs)
-        recs.append((sysbase, chars))
-        code_of = {ch: UI_CODES[SYS_OFF + i] for i, ch in enumerate(chars)}
+        if STR_POLICY.get(addr) == "body":
+            rk, code_of = body_rk, body_code
+        else:
+            if len(chars) > len(UI_CODES) - SYS_OFF:
+                raise SystemExit(f"낱개 문자열 {addr:06X} {ko!r} 이 팝업 칸을 넘는다")
+            rk = len(recs)
+            recs.append((sysbase, chars))
+            code_of = {ch: UI_CODES[SYS_OFF + i] for i, ch in enumerate(chars)}
         out = bytearray([UI_MARKER, rk])
         for ch in ko:
             out += b"\x0d\x0d" if ch == "\n" else \
@@ -427,7 +475,7 @@ def build_ui(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, bytes, list[
 
     log.append(f"  본문 슬롯 {body_off}/{len(CODES)} 사용 (공유 어휘) / "
                f"이름칸 코드 {len(UI_CODES)}개는 클래스명용")
-    return bytes(strs), recs, log
+    return bytes(strs), log
 
 
 def bake_records(recs: list[tuple[int, list[str]]], g: Glyphs) -> bytes:
@@ -535,9 +583,11 @@ def main() -> None:
         for k in KINDS:
             g.add(ko[f"{k}-{s:02d}"])
 
-    namestr, nameids, name_n = build_names(g)
+    # 글리프 기록표는 이름·UI·프롤로그가 함께 쓴다. UI 업로더가 k 로 색인한다.
+    recs: list[tuple[int, list[str]]] = []      # (타일 번호, 글리프 문자들)
+    namestr, nameids, name_n = build_names(g, recs)
     chains, chain_log = build_chains(rom, src, g)
-    uistr, recs, ui_log = build_ui(rom, src, g)
+    uistr, ui_log = build_ui(rom, src, g, recs)
     # 메뉴는 폰트가 아니라 미리 그려둔 그래픽이다. 글리프 풀과 타일맵 서술자를
     # 우리가 다시 쓰므로 위의 글리프 테이블·코드표와 아무것도 공유하지 않는다.
     menu_log = menu.build(rom, src)
@@ -566,9 +616,13 @@ def main() -> None:
     rom[MSG_HOOK:MSG_HOOK + 6] = b"\x4e\xb9" + UPLOADER2_AT.to_bytes(4, "big")
 
     # 이름 문자열표 포인터
-    assert int.from_bytes(rom[NAMEPTR_IMM:NAMEPTR_IMM + 4], "big") == NAMETBL_ORIG, \
-        f"{NAMEPTR_IMM:06X} 가 이름표 즉치 아님"
-    rom[NAMEPTR_IMM:NAMEPTR_IMM + 4] = NAMESTR_AT.to_bytes(4, "big")
+    # 이름 문자열표 포인터 — 대사 이름판 + 유닛 상태창 3변형.
+    # 목록 창은 제외한다. 여러 이름이 동시에 보이는데 우리 표는 타일 192..197 을
+    # 돌려쓰므로 모든 줄이 마지막 이름으로 변한다.
+    for imm in (NAMEPTR_IMM,) + NAMEPTR_PANEL:
+        assert int.from_bytes(rom[imm:imm + 4], "big") == NAMETBL_ORIG, \
+            f"{imm:06X} 가 이름표 즉치 아님"
+        rom[imm:imm + 4] = NAMESTR_AT.to_bytes(4, "big")
 
     # 코드 -> 타일 매핑은 전 화면 공통이므로 한 번만
     for i, c in enumerate(CODES):
