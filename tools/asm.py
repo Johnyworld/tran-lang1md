@@ -416,3 +416,32 @@ def build_uploader_labels(kfont: int, slot_base: int, target: int,
     body += w(0x4CDF) + w(0x0FFF)                # movem.l (a7)+, d0-d7/a0-a3
     body += tail
     return bytes(body)
+
+
+def build_uploader_block(src: int, dst: int, tiles: int, call_first: int) -> bytes:
+    """원래 호출을 먼저 하고, 고정 타일 블록을 VRAM 에 덮어쓴다.
+
+    `jsr <그래픽 로드>` (6바이트) 자리를 그대로 대신한다. 압축 리소스를 풀 필요가
+    없다 — 게임이 올린 뒤 그 자리를 우리 비압축 타일로 덮으면 된다. 승리/패배
+    라벨에서 통한 방법이고, 여기서는 선택 창 제목 글리프에 쓴다.
+
+    호출 규약: 원래 `jsr` 와 같아야 하므로 레지스터를 전부 보존한다.
+    """
+    body = bytearray()
+    body += w(0x4EB9) + l(call_first)             # jsr <원래 로드>
+    body += w(0x48E7) + w(0xFFF0)                 # movem.l d0-d7/a0-a3, -(a7)
+    body += w(0x40E7)                             # move.w sr, -(a7)
+    body += w(0x46FC) + w(0x2700)                 # move.w #$2700, sr
+    body += w(0x323C) + w(dst)                    # move.w #dst, d1     VRAM 주소
+    body += w(0x3E3C) + w(tiles - 1)              # move.w #tiles-1, d7
+    body += lea_abs(VDP_DATA, 2)                  # lea (C00000).l, a2
+    body += lea_abs(src, 3)                       # lea SRC, a3
+    loop_at = len(body)
+    body += vdp_set_write(0, 1)                   # d0 스크래치, d1 = VRAM 주소
+    body += w(0x249B) * 8                         # move.l (a3)+, (a2)  32바이트
+    body += w(0x0641) + w(0x0020)                 # addi.w #32, d1
+    body += w(0x51CF) + w((loop_at - (len(body) + 2)) & 0xFFFF)   # dbra d7, loop
+    body += w(0x46DF)                             # move.w (a7)+, sr
+    body += w(0x4CDF) + w(0x0FFF)                 # movem.l (a7)+, d0-d7/a0-a3
+    body += w(0x4E75)                             # rts
+    return bytes(body)

@@ -65,6 +65,16 @@ MENU_TSV = Path("translation/menu.tsv")
 
 UNTOUCHED = {0x030A1A}        # 문맥 미확인 — 서술자를 건드리지 않는다
 
+# ---------------------------------------------------------------- 선택 창 제목
+# 두 번째 풀. 리소스 0x81 -> VRAM 0x3800 (타일 448) 이고 **압축**이다. 풀 필요가
+# 없다 — 게임이 올린 직후 그 자리를 우리 비압축 타일로 덮는다(승리/패배 라벨과
+# 같은 방법). 그래서 리소스 로드 `jsr $53B4` 세 곳에 훅을 건다.
+TITLE_BASE_TILE = 448
+TITLE_OFF = 98                # 네 제목이 쓰는 오프셋 98..159 의 앞부터 쓴다
+TITLE_LOADS = (0x1181C, 0x18C9C, 0x19038)   # 리소스 0x81 을 올리는 세 자리
+TITLE_RECS = (0x030FEE, 0x03104C, 0x0310A6, 0x038800)
+GRAPHLOAD = 0x53B4
+
 
 def u16(b: bytes, p: int) -> int:
     return int.from_bytes(b[p:p + 2], "big")
@@ -81,7 +91,8 @@ def blocks(src: bytes) -> list[int]:
     return out
 
 
-def decode(src: bytes, ptr: int) -> tuple[int, int, int, list[list[int]], int]:
+def decode(src: bytes, ptr: int,
+           base_tile: int = POOL_BASE_TILE) -> tuple[int, int, int, list[list[int]], int]:
     """블록 -> (베이스타일, w, h, 그리드[행][열] = 풀 오프셋, 서술자 길이)."""
     base = u16(src, ptr + 4) & 0x7FF
     order, w, h = u16(src, ptr + 8), u16(src, ptr + 10), u16(src, ptr + 12)
@@ -108,7 +119,7 @@ def decode(src: bytes, ptr: int) -> tuple[int, int, int, list[list[int]], int]:
             rep = src[p + 1] - 1
             p += 2
     assert src[p] == 0xFF, f"{ptr:06X}: 서술자 끝이 0xFF 가 아니다"
-    off = base - POOL_BASE_TILE
+    off = base - base_tile
     grid = [[0] * w for _ in range(h)]
     for i, c in enumerate(cells):
         r, col = (i % h, i // h) if order == 2 else (i // w, i % w)
@@ -151,6 +162,87 @@ def load_ko() -> dict[tuple[str, int], str]:
     return ko
 
 
+def render_syllable(font: bytes, gmap: dict, ch: str) -> list[bytes]:
+    """한글 음절 하나를 16x16 -> 4bpp 타일 4개 (TL, TR, BL, BR) 로."""
+    if ch not in gmap:
+        raise SystemExit(f"둥근모꼴에 글리프 없음: {ch!r}")
+    ink = [[False] * 16 for _ in range(16)]
+    o = gmap[ch] * 32
+    for y in range(16):
+        bits = (font[o + y * 2] << 8) | font[o + y * 2 + 1]
+        for x in range(16):
+            if bits >> (15 - x) & 1 and 0 <= y + GLYPH_Y < 16:
+                ink[y + GLYPH_Y][x] = True
+    out = []
+    for tr, tc in ((0, 0), (0, 1), (1, 0), (1, 1)):
+        px = bytearray()
+        for y in range(8):
+            for k in range(4):
+                hi = INK if ink[tr * 8 + y][tc * 8 + k * 2] else BG
+                lo = INK if ink[tr * 8 + y][tc * 8 + k * 2 + 1] else BG
+                px.append((hi << 4) | lo)
+        out.append(bytes(px))
+    return out
+
+
+def build_titles(rom: bytearray, src: bytes) -> tuple[bytes, list[str]]:
+    """선택 창 제목 4개. 타일 블록을 만들고 서술자를 원본 길이 안에서 다시 쓴다.
+
+    이 풀(리소스 0x81)은 압축이지만 풀 필요가 없다. 게임이 VRAM 에 올린 직후
+    우리 비압축 타일로 덮으면 되고(`asm.build_uploader_block`), 서술자는 우리가
+    올린 자리를 가리키게 고친다. 원본 제목이 쓰던 오프셋 98.. 안에서만 쓰므로
+    같은 풀의 다른 그래픽(승리/패배 라벨 = 오프셋 74..93 등)은 건드리지 않는다.
+    """
+    ko, log = load_ko(), []
+    font, gmap = LABEL_BIN.read_bytes(), json.loads(LABEL_MAP.read_text())
+    tiles: list[bytes] = []
+    syl: dict[str, int] = {}
+
+    def slot(ch: str) -> int:
+        if ch not in syl:
+            syl[ch] = len(tiles)
+            tiles.extend(render_syllable(font, gmap, ch))
+        return syl[ch]
+
+    plans = []
+    for rec in TITLE_RECS:
+        text = ko.get((f"{rec:06X}", 0))
+        ptr = int.from_bytes(src[rec + 8:rec + 12], "big")
+        base, w, h, grid, dlen = decode(src, ptr, TITLE_BASE_TILE)
+        if not text:
+            log.append(f"  {rec:06X}  번역 없음 — 원문 유지")
+            continue
+        if len(text) * 2 > w:
+            raise SystemExit(f"{rec:06X} {text!r} 이 {w}칸을 넘는다 ({len(text)*2}칸)")
+        plans.append((rec, ptr, base, w, h, grid, dlen, text))
+        for ch in text:
+            slot(ch)
+    blank = len(tiles)
+    tiles.append(bytes([(BG << 4) | BG]) * 32)
+
+    for rec, ptr, base, w, h, grid, dlen, text in plans:
+        top, bot = [], []
+        for ch in text:
+            i = TITLE_OFF + syl[ch]
+            top += [i, i + 1]
+            bot += [i + 2, i + 3]
+        pad = w - len(top)
+        grid[0] = top + [TITLE_OFF + blank] * pad
+        grid[1] = bot + [TITLE_OFF + blank] * pad
+        desc = (b"\x00\x02" + w.to_bytes(2, "big") + h.to_bytes(2, "big")
+                + encode(grid, w, h, base - TITLE_BASE_TILE))
+        if len(desc) > dlen:
+            raise SystemExit(f"{rec:06X}: 서술자 {len(desc)}B 가 원본 {dlen}B 를 넘는다")
+        rom[ptr + 8:ptr + 8 + len(desc)] = desc
+        log.append(f"  {rec:06X}  {w}x{h}  {len(desc):3d}/{dlen}B  {text}")
+    if TITLE_OFF + len(tiles) > MAX_CELL:
+        raise SystemExit(f"제목 타일 {len(tiles)}개가 오프셋 {MAX_CELL} 를 넘는다")
+    log.append(f"  음절 {len(syl)}개 / 타일 {len(tiles)}개 -> 풀 오프셋 "
+               f"{TITLE_OFF}..{TITLE_OFF + len(tiles) - 1} (VRAM 타일 "
+               f"{TITLE_BASE_TILE + TITLE_OFF}..)")
+    return b"".join(tiles), log
+
+
 class Pool:
     """풀 252타일을 다시 굽는다. 고정 오프셋은 원본 픽셀 그대로 남긴다."""
 
@@ -165,26 +257,11 @@ class Pool:
     def syllable(self, ch: str) -> tuple[int, int, int, int]:
         if ch in self.syl:
             return self.syl[ch]
-        if ch not in self.gmap:
-            raise SystemExit(f"둥근모꼴에 글리프 없음: {ch!r}")
         if len(self.free) < 4:
             raise SystemExit(f"풀에 빈 타일이 없다 ({len(self.syl)}음절까지 넣었다)")
         slot = tuple(self.free.pop(0) for _ in range(4))
-        ink = [[False] * 16 for _ in range(16)]
-        o = self.gmap[ch] * 32
-        for y in range(16):
-            bits = (self.font[o + y * 2] << 8) | self.font[o + y * 2 + 1]
-            for x in range(16):
-                if bits >> (15 - x) & 1 and 0 <= y + GLYPH_Y < 16:
-                    ink[y + GLYPH_Y][x] = True
-        for t, (tr, tc) in zip(slot, ((0, 0), (0, 1), (1, 0), (1, 1))):
-            px = bytearray()
-            for y in range(8):
-                for k in range(4):
-                    hi = INK if ink[tr * 8 + y][tc * 8 + k * 2] else BG
-                    lo = INK if ink[tr * 8 + y][tc * 8 + k * 2 + 1] else BG
-                    px.append((hi << 4) | lo)
-            self.tiles[t] = px
+        for t, px in zip(slot, render_syllable(self.font, self.gmap, ch)):
+            self.tiles[t] = bytearray(px)
         self.syl[ch] = slot
         return slot
 

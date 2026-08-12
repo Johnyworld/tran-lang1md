@@ -48,7 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from asm import UI_MARKER, build_uploader_labels, build_uploader_msg  # noqa: E402
-from asm import build_uploader_ui  # noqa: E402
+from asm import build_uploader_ui, build_uploader_block  # noqa: E402
 from chain import parse_chain  # noqa: E402
 from events import e82c_sites  # noqa: E402
 import menu  # noqa: E402
@@ -70,6 +70,7 @@ UPLOADER_AT, UPLOADER2_AT, UI_UPLOADER_AT = 0x80000, 0x80200, 0x80700
 LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
 UISTR_AT, UITBL_AT, ALTTBL_AT = 0x82000, 0x83000, 0x8A000
 CLSB_AT = 0x8B000        # 전직 후보용 클래스표 사본
+TITLE_AT, TITLE_UP_AT = 0x8C000, 0x80D00   # 선택 창 제목 타일 + 업로더
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -100,7 +101,10 @@ STR_POLICY = {0x30A92: "popup", 0x31564: "shared", 0x3156C: "shared"}
 #   상태창 3변형 + 레벨업·전직 팝업 3개의 콜백 (0x151AC / 0x15218 / 0x1527A)
 # 출전 준비 화면 위쪽 지휘관 이름판처럼 여러 개가 동시에 보이는 자리는 건드리지
 # 않는다 — 우리 방식은 타일 192..197 을 돌려쓰므로 모두 마지막 이름으로 변한다.
-NAMEPTR_PANEL = (0x1257C, 0x1260E, 0x126A4, 0x151C2, 0x1522E, 0x15290)
+#   0x12260 은 상태창 4번째 변형이다 (이름 -> 클래스명 -> LV 를 잇달아 그리는
+#   같은 모양). 나머지 10곳은 아직 분류하지 않았다 — uiscan.py 가 목록을 낸다.
+NAMEPTR_PANEL = (0x1257C, 0x1260E, 0x126A4, 0x12260,
+                 0x151C2, 0x1522E, 0x15290)
 UI_FIELDS = {                     # 필드 -> (원본 표, 엔트리 수, 칸 수, 배정 방식)
     "magic": (0x2B9AC, 14, 8, "shared"),
     "item":  (0x2B8E4, 10, 8, "shared"),
@@ -693,6 +697,20 @@ def main() -> None:
     # 메뉴는 폰트가 아니라 미리 그려둔 그래픽이다. 글리프 풀과 타일맵 서술자를
     # 우리가 다시 쓰므로 위의 글리프 테이블·코드표와 아무것도 공유하지 않는다.
     menu_log = menu.build(rom, src)
+    # 선택 창 제목 — 압축 풀(리소스 0x81)이라 로드 직후 VRAM 을 덮는다.
+    titles, title_log = menu.build_titles(rom, src)
+    place(rom, TITLE_AT, titles, "선택 창 제목 타일")
+    tcode = build_uploader_block(
+        src=TITLE_AT, dst=(menu.TITLE_BASE_TILE + menu.TITLE_OFF) * 32,
+        tiles=len(titles) // 32, call_first=menu.GRAPHLOAD)
+    place(rom, TITLE_UP_AT, tcode, "제목 업로더")
+    want_load = b"\x4e\xb9" + menu.GRAPHLOAD.to_bytes(4, "big")
+    for site in menu.TITLE_LOADS:
+        assert rom[site:site + 6] == want_load, f"{site:06X} 가 jsr $53B4 아님"
+        rom[site:site + 6] = b"\x4e\xb9" + TITLE_UP_AT.to_bytes(4, "big")
+    title_log.append(f"  훅 {len(menu.TITLE_LOADS)}곳 (리소스 0x81 로드) -> "
+                     f"{TITLE_UP_AT:06X}")
+    menu_log += ["  -- 선택 창 제목 (풀 0x81)"] + title_log
 
     place(rom, NAMESTR_AT, namestr, "이름 문자열표")
     place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")

@@ -106,17 +106,21 @@ def main() -> None:
             print(f"  {p:06X}  {w}x{h}  {txt!r}")
     print(f"  -> {n}개")
 
-    # 3) 표 엔트리 — 우리가 대신하는 표는 빈 칸만 남았는지 확인
-    print("\n== 16B 고정 표 (우리 표로 대신하는 것)")
-    for name, at, cnt in (("이름", 0x2AE64, 78), ("클래스", 0x2B334, 91),
-                          ("아이템", 0x2B8E4, 10), ("마법", 0x2B9AC, 14)):
-        jp = 0
-        for k in range(cnt):
-            e = src[at + k * 16:at + (k + 1) * 16]
-            end = e.find(b"\xff")
-            if any(b in KANA for b in e[:end if end >= 0 else 16]):
-                jp += 1
-        print(f"  {name:4s} {at:06X}  일본어 엔트리 {jp}/{cnt}")
+    # 3) 16B 고정 표 — 원본을 아직 읽는 자리가 곧 남은 일본어다.
+    #    표 자체는 건드리지 않고 우리 사본으로 즉치만 돌리므로, 안 돌린 자리는
+    #    원문이 나온다. 그게 의도인 곳(여러 이름이 동시에 보이는 창)도 있다.
+    built = Path("work/korom_all.md")
+    if not built.exists():
+        print("\n(work/korom_all.md 가 없어 표 조사는 건너뜀)")
+        return
+    rom = built.read_bytes()
+    print("\n== 원본 16B 표를 아직 읽는 lea 자리 (빌드된 롬 기준)")
+    for name, at in (("이름", 0x2AE64), ("클래스", 0x2B334),
+                     ("아이템", 0x2B8E4), ("마법", 0x2B9AC)):
+        sites = leas.get(at, [])
+        left = [p for p in sites if int.from_bytes(rom[p:p + 4], "big") == at]
+        print(f"  {name:4s} {at:06X}  {len(left)}/{len(sites)}곳 남음  "
+              + " ".join(f"{p:06X}" for p in left))
 
 
 if __name__ == "__main__":
