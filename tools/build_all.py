@@ -74,8 +74,8 @@ NAMEBAR_AT = 0x81800     # 아래 상태바용 이름표 사본 (페이지 6)
 UISTR_AT, UITBL_AT, ALTTBL_AT = 0x82000, 0x83000, 0x8C000
 CLSB_AT = 0x8D000        # 전직 후보용 클래스표 사본
 TITLE_AT, TITLE_UP_AT = 0x8E000, 0x80D00   # 선택 창 제목 타일 + 업로더
-RESTBL_AT, BATTLE_AT = 0x8F000, 0x94000   # 리소스 패치 표 / 전투씬 라벨 타일
-DEPLOY_AT, DEPLOY_UP_AT = 0x95000, 0x80E00   # 출전 준비 라벨 타일 + 업로더 2개
+RESTBL_AT, BATTLE_AT = 0x8F000, 0x98000   # 리소스 패치 표 / 전투씬 라벨 타일
+DEPLOY_AT, DEPLOY_UP_AT = 0x99000, 0x80E00   # 출전 준비 라벨 타일 + 업로더 2개
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
