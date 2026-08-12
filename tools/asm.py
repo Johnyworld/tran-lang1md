@@ -226,15 +226,18 @@ UI_MARKER = 0x01
 
 
 def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
-                      table_at: int = 0x62BC) -> bytes:
+                      table_at: int = 0x62BC, alt_table: int = 0) -> bytes:
     """UI 문자열 업로더. `0x5FD4` 의 `lea $62BC.l, a2` 자리를 그대로 대신한다.
 
     UI 텍스트는 예외 없이 `lea <문자열>, a1` + `jsr $5F60` 으로 그려진다. 그래서
     **문자열이 자기 글리프를 들고 다니게** 만들면 그리기 지점마다 훅을 걸 필요가
     없다. `$5F60` 의 문자열 루프 직전 한 곳이면 전부 걸린다.
 
-    문자열 앞머리:  `[0x01][k]`  — k 번째 글리프 기록을 올리라는 뜻
-    글리프 기록:    `[타일][N][ID x N]`  (uitbl + k*stride, ID 는 7비트 두 바이트)
+    ```
+    문자열 앞머리  [0x01][k]                 k 번째 글리프 기록을 올려라
+    글리프 기록    [플래그][타일][N][ID x N]   uitbl + k*stride, ID 는 7비트 두 바이트
+    플래그 bit0    코드->타일 표를 alt_table 로 갈아 끼운다
+    ```
 
     두 바이트만 붙이는 간접 방식인 이유: 클래스명 같은 표는 `lsl.w #4` 로 색인해
     **엔트리가 16바이트로 고정**이다. 글리프 목록을 문자열에 직접 담으면 넘친다.
@@ -243,19 +246,26 @@ def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
     ·ASCII·줄바꿈(0x0D)과 겹치지 않는 값이어야 한다. 대사 본문 문자열도 이 훅을
     지나가는데(렌더러가 같다) 첫 바이트가 본문 코드라 절대 0x01 이 아니다.
 
-    a1 은 movem 에서 **빼둔다**. 헤더를 지나간 만큼 전진이 그대로 남아야 하고,
-    그래야 `$5F60` 의 루프가 본문부터 읽는다.
+    **코드 페이지 교체가 이 훅의 값이다.** 우리가 돌려주는 a2 가 `$5F60` 이 쓰는
+    코드->타일 표이므로, 문자열마다 다른 표를 줄 수 있다. 저바이트 코드가 다 차서
+    가나 코드를 훔치려 했으나 남은 대사 1026개가 가나 62종을 쓰고 있어(`。` `「` 까지
+    포함) 전역 재매핑은 불가였다. 대신 **그 문자열만** 다른 표로 그리면 남은
+    일본어는 원본 표를 그대로 쓴다.
+
+    a1 과 a2 는 movem 에서 **빼둔다**. a1 은 헤더를 지나간 전진이 남아야 하고
+    (`$5F60` 의 루프가 본문부터 읽는다), a2 는 우리가 고른 표를 들고 나가야 한다.
 
     `k` 는 범위를 검사한다. 아직 번역하지 않은 원본 문자열이 우연히 `0x01` 로
     시작하면 엉뚱한 기록을 읽어 VRAM 을 망가뜨리기 때문이다. 범위 밖이면 a1 을
-    건드리지 않고 나가므로 원본과 완전히 같게 동작한다.
+    건드리지 않고 원본 표로 나가므로 원본과 완전히 같게 동작한다.
     """
+    SAVE, REST = 0xFF9E, 0x79FF                   # d0-d7/a0/a3-a6 (a1·a2 제외)
     body = bytearray()
     body += w(0x0C11) + w(UI_MARKER)              # cmpi.b #$01, (a1)
     body += w(0x6600) + w(0x0000)                 # bne.w .plain
     bne_at = len(body) - 2
 
-    body += w(0x48E7) + w(0xFFBE)                 # movem.l d0-d7/a0/a2-a6, -(a7)
+    body += w(0x48E7) + w(SAVE)                   # movem.l d0-d7/a0/a3-a6, -(a7)
     body += w(0x7000)                             # moveq #0, d0
     body += w(0x1029) + w(0x0001)                 # move.b 1(a1), d0    k
     body += w(0x0C40) + w(nrec)                   # cmpi.w #nrec, d0
@@ -267,6 +277,8 @@ def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
     body += w(0xC0FC) + w(stride)                 # mulu.w #stride, d0
     body += lea_abs(uitbl, 0)                     # lea UITBL, a0
     body += w(0xD0C0)                             # adda.w d0, a0
+    body += w(0x7C00)                             # moveq #0, d6
+    body += w(0x1C18)                             # move.b (a0)+, d6    플래그
     body += w(0x7200)                             # moveq #0, d1
     body += w(0x1218)                             # move.b (a0)+, d1    타일 번호
     body += w(0xEB49)                             # lsl.w #5, d1        x32 = VRAM 주소
@@ -275,12 +287,26 @@ def build_uploader_ui(kfont: int, uitbl: int, nrec: int, stride: int = 32,
     body += w(0x6700) + w(0x0000)                 # beq.w .done
     beq_at = len(body) - 2
     body += w(0x5347)                             # subq.w #1, d7
-    body += _glyph_loop(kfont, None, areg=0)
+    body += _glyph_loop(kfont, None, areg=0)      # d6 은 건드리지 않는다
     body[beq_at:beq_at + 2] = w(len(body) - (beq_at - 2) - 2)       # .done
     body += w(0x46DF)                             # move.w (a7)+, sr
 
+    # 코드 페이지 선택 — a2 는 movem 밖이라 그대로 남는다
+    body += lea_abs(table_at, 2)                  # lea $62BC.l, a2
+    if alt_table:
+        body += w(0x0806) + w(0x0000)             # btst #0, d6
+        body += w(0x6700) + w(0x0008)             # beq.w .keep — lea 6바이트를 건너뛴다
+        #                                          (분기 기준이 PC+2 라 변위는 8)
+        body += lea_abs(alt_table, 2)             # lea ALT.l, a2
+    body += w(0x6000) + w(0x0000)                 # bra.w .restore_end
+    bra_at = len(body) - 2
+
     body[bcc_at:bcc_at + 2] = w(len(body) - (bcc_at - 2) - 2)       # .restore
-    body += w(0x4CDF) + w(0x7DFF)                 # movem.l (a7)+, d0-d7/a0/a2-a6
+    body += lea_abs(table_at, 2)                  # lea $62BC.l, a2   원본과 같게
+
+    body[bra_at:bra_at + 2] = w(len(body) - (bra_at - 2) - 2)       # .restore_end
+    body += w(0x4CDF) + w(REST)                   # movem.l (a7)+, d0-d7/a0/a3-a6
+    body += w(0x4E75)                             # rts
 
     body[bne_at:bne_at + 2] = w(len(body) - (bne_at - 2) - 2)       # .plain
     body += lea_abs(table_at, 2)                  # lea $62BC.l, a2   훔친 명령
