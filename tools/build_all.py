@@ -68,9 +68,9 @@ UI_TSV = Path("translation/ui.tsv")
 ROM_SIZE = 0x100000
 UPLOADER_AT, UPLOADER2_AT, UI_UPLOADER_AT = 0x80000, 0x80200, 0x80700
 LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
-UISTR_AT, UITBL_AT, ALTTBL_AT = 0x82000, 0x83000, 0x8A000
-CLSB_AT = 0x8B000        # 전직 후보용 클래스표 사본
-TITLE_AT, TITLE_UP_AT = 0x8C000, 0x80D00   # 선택 창 제목 타일 + 업로더
+UISTR_AT, UITBL_AT, ALTTBL_AT = 0x82000, 0x83000, 0x8C000
+CLSB_AT = 0x8D000        # 전직 후보용 클래스표 사본
+TITLE_AT, TITLE_UP_AT = 0x8E000, 0x80D00   # 선택 창 제목 타일 + 업로더
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -127,7 +127,15 @@ CAND_SITE = 0x151FE       # 후보를 그리는 lea 즉치 (0x151FC) — 이 자
 #   1 용병 클래스     타일 212.. — 출전 준비 화면 (이름 192 / 클래스 198 / 라벨 206)
 #   2 전직 후보 클래스 타일 214.. — 전직 팝업. 팝업 문장(206..)과 같이 보이므로
 #                     문장 음절 수만큼 비켜 둔다. 후보 2개가 어휘를 공유한다.
-PAGES = {"merc": (1, 212), "cand": (2, 214)}
+#   3 프롤로그 화면 승패조건   타일 192.. — 원본이 히라가나 폰트로 쓰던 자리다.
+#                            우리 빌드의 그 화면에는 일본어가 없어 비어 있다
+#                            (원본 VRAM 덤프의 네임테이블로 확인)
+#   4 프롤로그 화면 스테이지명  타일 232..
+PAGES = {"merc": (1, 212), "cand": (2, 214), "cond": (3, 192), "stage": (4, 232)}
+# 프롤로그 화면 세 문자열은 **각자 자기 페이지**를 쓴다. 화면 단위 합집합으로
+# 묶었더니 스테이지 1 이 64/64 로 꽉 차서 나머지 스테이지의 전문(4~5줄)이 들어갈
+# 자리가 없었다. 문자열마다 타일 구간을 따로 주면 예산이 셋으로 쪼개진다.
+SCREEN_PAGE = {"prologue": (0, SLOT_BASE, 64), "cond": (3, 192, 40), "stage": (4, 232, 24)}
 ALT_BASE = 212            # (호환용 — 페이지 1 의 시작 타일)
 BG, INK, OUTLINE = 13, 15, 14
 
@@ -763,24 +771,29 @@ def main() -> None:
     # **어느 경로로 그려도** 문자열이 자기 글리프를 들고 온다. 세 문자열이 한 화면에
     # 동시에 보이니 기록은 화면 단위 합집합 하나를 공유한다(순서에 안 깨진다).
     at = TEXT_AT
-    print(f"{'st':>3}  {'글리프':>5}  {'바이트':>6}   위치")
+    print(f"{'st':>3}  {'스테이지명':>7} {'프롤로그':>7} {'승패조건':>7}  {'바이트':>6}   위치")
     over = []
     for s in stages:
         texts = {k: ko[f"{k}-{s:02d}"] for k in KINDS}
-        slots = assign([texts[k] for k in KINDS])
-        if len(slots) > len(CODES):
-            over.append((s, len(slots)))
-        rk = len(recs)
-        recs.append((SLOT_BASE, list(slots), 0))
-        start, total = at, 0
+        start, total, used = at, 0, {}
         for k in KINDS:
+            page, base, cap = SCREEN_PAGE[k]
+            slots = assign([texts[k]])
+            used[k] = len(slots)
+            if len(slots) > cap:
+                over.append((s, k, len(slots), cap))
+                continue
+            rk = len(recs)
+            recs.append((base, list(slots), page))
             blob = bytes([UI_MARKER, rk]) + encode(texts[k], slots) + b"\xff"
             at = place(rom, at, blob, f"화면 {k}-{s:02d}") + 2
             t = TABLES[k]
             rom[t + (s - 1) * 4:t + (s - 1) * 4 + 4] = (at - len(blob) - 2).to_bytes(4, "big")
             total += len(blob)
-        mark = "✗" if len(slots) > len(CODES) else " "
-        print(f"{s:3d}  {len(slots):3d}/{len(CODES)}{mark} {total:6d}   {start:06X}")
+        mark = "✗" if any(o[0] == s for o in over) else " "
+        print(f"{s:3d}  {used['stage']:4d}/{SCREEN_PAGE['stage'][2]:<3}"
+              f" {used['prologue']:4d}/{SCREEN_PAGE['prologue'][2]:<3}"
+              f" {used['cond']:4d}/{SCREEN_PAGE['cond'][2]:<3}{mark}{total:6d}   {start:06X}")
 
     # 기록표는 프롤로그 화면까지 다 모인 뒤에 굽는다. 글리프 테이블은 이미 위에서
     # 구웠지만 프롤로그 글리프는 main 진입부에서 g.add 로 넣어 뒀으므로 문제없다.
@@ -838,7 +851,9 @@ def main() -> None:
     print(f"  {min(pro)[0]:06X}..{max(pro)[1]:06X}  "
           f"{sum(e - s for s, e, _ in pro):6d}B  프롤로그 화면 텍스트 {len(pro)}개")
     if over:
-        print(f"\n✗ 코드 초과: {over}  — 어휘를 줄이거나 CODES 를 늘려야 한다")
+        for st, k, n, cap in over:
+            print(f"\n✗ {k}-{st:02d} 글리프 {n}자가 {cap}칸을 넘는다 — 문장을 줄일 것")
+        raise SystemExit("글리프 예산 초과 — 그 화면은 문자열이 안 들어간다")
     print(f"-> {out}")
 
 
