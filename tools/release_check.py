@@ -12,6 +12,9 @@ ROM = Path(sys.argv[1] if len(sys.argv) > 1 else "work/korom_all.md")
 CLS_TBL, CLS_N, CLS_STRIDE = 0x2C06C, 91, 128
 NOTE_AT, DEBUG_NOTE = 0x1C8, b"DEBUG"
 ROM_SIZE = 0x100000
+# 디버그 롬이 코드에 손대는 자리. 표 비교로는 안 잡히므로 따로 적는다.
+# 늘어나면 여기 한 줄 추가 — docs/RELEASE.md 와 짝을 맞춘다.
+CODE_SITES = ((0xD4D5, "전직 레벨 조건 (cmpi.b #$A, $8(a1))"),)
 
 
 def main() -> None:
@@ -32,6 +35,13 @@ def main() -> None:
     print(f"{'OK ' if ok else '✗  '} 헤더 표식  {note.rstrip(bytes([0x20, 0x00]))!r}")
     if not ok:
         fails.append("디버그 표식")
+
+    for at, what in CODE_SITES:
+        ok = rom[at] == src[at]
+        print(f"{'OK ' if ok else '✗  '} 코드 {at:06X}  {what}  "
+              f"{src[at]:02X} / 지금 {rom[at]:02X}")
+        if not ok:
+            fails.append(f"코드 {at:06X}")
 
     end = CLS_TBL + CLS_N * CLS_STRIDE
     ok = rom[CLS_TBL:end] == src[CLS_TBL:end]

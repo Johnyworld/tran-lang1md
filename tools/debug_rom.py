@@ -12,7 +12,7 @@ $B5A0  lea $2C06C, a0 / a0 += 클래스 x 128     -> 클래스별 128바이트 �
 클래스 번호는 이름표(`0x2B334`)와 같은 색인이다. 레코드 1 이 파이터고 값이
 레딘의 L1 실측값(HP10 AT23 DF21 MV6, 지휘범위 3)과 정확히 맞아 확정했다.
 
-알아낸 필드 (상태창이 그리는 자리에서 역추적)
+알아낸 필드
 ```
 +02  HP        전투 병력 수 — 10 이 최대로 보이므로 건드리지 않는다
 +04  MP
@@ -20,8 +20,20 @@ $B5A0  lea $2C06C, a0 / a0 += 클래스 x 128     -> 클래스별 128바이트 �
 +08  DF
 +0A  MV
 +70  지휘범위
-+7A  수정 A+
-+7C  수정 D+
++78  수정 A+
++7A  수정 D+
++7C  레벨업 경험치 문턱 / 8      (0x0D3BA: d1 = $7C(a2) << 3, EXP 와 비교)
+```
+`+78/+7A` 는 볼코프(소드마스터 = 레코드 7)의 실측값 `A+0 D+9` 로 교차 검증했다.
+처음에 `+7A/+7C` 로 적었는데 클래스 7 이 `9, 3` 이어서 틀린 것이 드러났다.
+
+레벨·전직 규칙 (실측)
+---------------------
+```
+0x0D3B0  7(a1) += 획득 EXP           유닛 +07 = 누적 EXP, +08 = 레벨
+0x0D3C0  문턱 = 클래스 +7C x 8       파이터 16 / 로드 32 / 소드마스터·나이트 24
+0x0D3D2  레벨 9 이상 + 전직 후보 없음($FFE252 == -1) 이면 레벨 정지
+0x0D4D2  cmpi.b #$A, $8(a1)          **전직은 레벨 10 부터** (그 아래는 팝업 안 뜬다)
 ```
 
 클래스 1..33 이 광 진영(아군) 계열이고 34..62 가 암 진영이다. 표에 같은 이름이
@@ -37,6 +49,9 @@ OFF = {"MP": 4, "AT": 6, "DF": 8, "MV": 0xA, "CMD": 0x70}
 
 BOOST = {"MP": 99, "AT": 99, "DF": 99, "MV": 10, "CMD": 8}
 WEAKEN = {"AT": 1, "DF": 1}
+EXP_OFF, EXP_FAST = 0x7C, 0          # 문턱 = 값 x 8 -> 0 이면 한 마리로 레벨업
+# 전직 레벨 조건. `cmpi.b #$A, $8(a1)` 의 즉치 바이트 한 개다.
+CC_IMM, CC_ORIG, CC_DEBUG = 0xD4D5, 0x0A, 0x01
 
 IN, OUT = Path("work/korom_all.md"), Path("work/korom_debug.md")
 # 헤더 노트 필드(게임 동작과 무관)에 표식을 남긴다. 나중에 어느 파일이 무엇인지
@@ -60,8 +75,15 @@ def main() -> None:
     for cls in ALLY:
         for field, value in BOOST.items():
             poke(rom, cls, field, value)
+        at = CLS_TBL + cls * CLS_STRIDE + EXP_OFF
+        rom[at:at + 2] = EXP_FAST.to_bytes(2, "big")
     print(f"아군 클래스 {ALLY.start}..{ALLY.stop - 1}: "
-          + " ".join(f"{k}={v}" for k, v in BOOST.items()))
+          + " ".join(f"{k}={v}" for k, v in BOOST.items())
+          + f" / 레벨업 문턱 {EXP_FAST * 8} EXP")
+    assert rom[CC_IMM] == CC_ORIG, f"{CC_IMM:06X} 가 전직 레벨 조건이 아니다"
+    rom[CC_IMM] = CC_DEBUG
+    print(f"전직 레벨 조건 {CC_IMM:06X}: {CC_ORIG} -> {CC_DEBUG} "
+          f"(레벨 {CC_DEBUG} 부터 전직 팝업)")
     if weak:
         for cls in FOE:
             for field, value in WEAKEN.items():
