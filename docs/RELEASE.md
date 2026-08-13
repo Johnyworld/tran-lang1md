@@ -96,6 +96,7 @@ A+ / D+ / HP / MP / AT / DF / MV / LV / ITEM / Pts
 python3 tools/build_all.py --release
 python3 tools/uiscan.py                 # 남은 일본어 목록이 의도한 것만인지
 python3 tools/release_check.py          # 아래 항목을 기계가 확인한다
+python3 tools/patch.py                  # IPS + BPS. 생성 후 재적용 검증까지 한다
 ```
 
 `release_check.py` 가 보는 것:
@@ -107,3 +108,16 @@ python3 tools/release_check.py          # 아래 항목을 기계가 확인한�
   — **길이까지 비교한다.** 한 바이트만 보던 때 `0x31020 -> 0x32A8E` 를 놓쳤다
   (앞 두 바이트가 같다)
 - `0x1A4` 가 1MB 끝인가
+
+## 6. 배포물
+
+```
+work/korom.bps   BPS — 원본·결과 CRC32 를 품는다. 롬이 다르면 패처가 거부한다 (권장)
+work/korom.ips   IPS — 구형 패처 호환용
+```
+
+패치는 **배포 빌드로만** 만든다. `patch.py` 는 체크섬 우회(`0x18E == 0`)나 디버그
+표식이 남아 있으면 생성을 거부한다. 롬이 512KB -> 1MB 로 커지지만 두 형식 모두
+문제없다 (IPS 는 원본 끝을 넘는 레코드를 이어 붙이고 BPS 는 결과 크기를 헤더에 적는다).
+
+`work/` 는 gitignore 다. 패치는 원본 그래픽 일부를 품으므로 레포에 커밋하지 않는다.

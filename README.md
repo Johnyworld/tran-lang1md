@@ -28,11 +28,24 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 **원본 픽셀 유지 결정**이고, `030A1A` 메뉴는 **도달 불가한 죽은 코드**다(창을 여는
 루틴 `0x103F0` 을 부르는 곳이 롬 전체에 없고 원본에서도 항목이 깨져 있다).
 
-배포판 빌드와 검사:
+배포판 빌드 · 검사 · 패치 생성:
 
 ```
 python3 tools/build_all.py --release     # work/korom_all.md (정상 체크섬)
 python3 tools/release_check.py           # 체크섬·디버그 표식·스탯 표·코드·롬 크기
+python3 tools/patch.py                   # work/korom.bps + work/korom.ips
+```
+
+`patch.py` 는 만든 패치를 **다시 적용해 배포판과 바이트 단위로 같은지 확인**하고
+다르면 실패한다. 패치 파일은 원본 그래픽 일부를 품으므로 레포에 커밋하지 않는다
+(`work/` 는 gitignore).
+
+```
+적용 대상   Langrisser.md  524288B  SHA1 cc67c5a3b91e706b495eb561a95a038fff72b5da
+                                    CRC32 B6EA5016
+적용 결과   1048576B                CRC32 A0285D68
+패처        BPS 권장 (원본 CRC 검사) — Flips, beat, Rom Patcher JS
+            IPS 는 구형 패처 호환용
 ```
 
 분석 내용과 실측 근거는 [docs/STATUS.md](docs/STATUS.md), 번역이 아닌 변경(체크섬
@@ -48,6 +61,7 @@ python3 tools/release_check.py           # 체크섬·디버그 표식·스탯 �
 | `tools/tilescan.py` | 타일맵 라벨 전수 조사 (`$5CDC` 호출 61곳) |
 | `tools/debug_rom.py` | 테스트용 — 아군을 강하게 → `work/korom_debug.md` |
 | `tools/release_check.py` | 배포판 검사 — 번역 아닌 변경이 남았는지 (`docs/RELEASE.md`) |
+| `tools/patch.py` | 배포 패치 생성 (IPS + BPS) — 재적용 검증 포함 |
 | `tools/chain.py` | 본편 대사 체인 파서 (앵커 하나 = 대화 한 덩이) |
 | `tools/events.py` | 스테이지 이벤트 표 -> 앵커 (이야기 순서) |
 | `tools/sheet.py` | `translation/dialogue.tsv` 재생성 (기존 번역 보존) |
