@@ -78,6 +78,7 @@ TITLE_AT, TITLE_UP_AT = 0x8E000, 0x80D00   # 선택 창 제목 타일 + 업로�
 RESTBL_AT, BATTLE_AT = 0x8F000, 0x98000   # 리소스 패치 표 / 전투씬 라벨 타일
 DEPLOY_AT, DEPLOY_UP_AT = 0x99000, 0x80E00   # 출전 준비 라벨 타일 + 업로더 2개
 BAR_TILE_AT, BAR_UP_AT = 0x99800, 0x80F00    # 전투씬 빈칸 바 타일 + 복원 업로더
+ENDING_AT = 0x99900                          # 엔딩 조각 문자열
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -698,6 +699,68 @@ def bake_records(recs: list[tuple[int, list[str], int]], g: Glyphs) -> bytes:
     return bytes(tbl)
 
 
+# -------------------------------------------------------------------- 엔딩 텍스트
+# 엔딩의 가로 스크롤 문장. 대사 체인이 아니라 **자기 포인터 표**를 갖는다.
+#
+# ```
+# 0x2087C  조각 포인터 14개 (뒤 4개는 같은 공백 문자열)
+# 0x20860  move.w #$17,d2 / #$e000,d3 ... jsr $5F60    23행 / 플레인 B
+# ```
+# 찾은 길: 덤프의 네임테이블에서 그 줄의 타일을 읽고(가로 스크롤 버퍼라 앞이 잘려
+# 가운데 조각으로 검색해야 했다) **데이터 = 타일 - 0x20** 으로 롬을 되짚었다.
+# 실제로는 표준 대본 코덱 그대로이고, 엔딩 텍스트가 `0x7E` 로 시작하는데 그것이
+# 렌더러의 **타일 +0x40 토글**(`0x600E: eori.w #$40, $FF9134`)이다. 그래서 히라가나
+# 폰트 블록(타일 0xC0..0xFF)을 가리키고 있었다.
+#
+# 우리는 `0x7E` 를 안 쓰므로 오프셋이 0 이고, 표준 코드->타일 표가 그대로 맞는다.
+# 조각마다 `[0x01][k]` 를 달아 기록 하나(어휘 전체)를 올린다 — 스크롤 중 여러 조각이
+# 동시에 보이는데 어휘를 공유하므로 서로 덮지 않는다. 엔딩 화면에는 다른 한글이 없다.
+ENDING_TBL, ENDING_N, ENDING_CELLS = 0x2087C, 14, 17
+ENDING_TSV = Path("translation/ending.tsv")
+
+
+def build_ending(g: Glyphs, recs: list[tuple[int, list[str], int]]) -> tuple[bytes, list[int], list[str]]:
+    """엔딩 조각 문자열 + 포인터 값. 조각 전체가 기록 하나를 공유한다."""
+    rows = [ln.split("\t") for ln in ENDING_TSV.read_text().rstrip("\n").split("\n")[1:]]
+    kos = [(r[2] if len(r) > 2 else "") for r in rows]
+    vocab: list[str] = []
+    for ko in kos:
+        for ch in ko:
+            if ch not in ASCII_OK and ch not in vocab:
+                vocab.append(ch)
+    if len(vocab) > len(CODES):
+        raise SystemExit(f"엔딩 어휘 {len(vocab)}자가 본문 코드 {len(CODES)}개를 넘는다")
+    vk, vmap = len(recs), {ch: CODES[i] for i, ch in enumerate(vocab)}
+    recs.append((SLOT_BASE, vocab, 0))
+
+    blob, ptrs, log = bytearray(), [], []
+    blank = None
+    for i, ko in enumerate(kos):
+        if not ko:
+            if blank is None:                       # 공백 조각은 하나만 두고 공유한다
+                blank = len(blob)
+                blob += b" " * ENDING_CELLS + b"\xff"
+            ptrs.append(blank)
+            log.append(f"  {i:2d} 공백")
+            continue
+        if len(ko) > ENDING_CELLS:
+            raise SystemExit(f"엔딩 조각 {i} {ko!r} 이 {ENDING_CELLS}칸을 넘는다")
+        ptrs.append(len(blob))
+        blob += bytes([UI_MARKER, vk])
+        for ch in ko:
+            blob.append(ord(ch) if ch in ASCII_OK else vmap[ch])
+        blob += b"\xff"
+        log.append(f"  {i:2d} {len(ko):2d}칸  {ko}")
+    if blank is None:                               # 남는 포인터는 공백으로 채운다
+        blank = len(blob)
+        blob += b" " * ENDING_CELLS + b"\xff"
+    while len(ptrs) < ENDING_N:
+        ptrs.append(blank)
+    log.insert(0, f"  어휘 {len(vocab)}자 / 타일 {SLOT_BASE}..{SLOT_BASE + len(vocab) - 1}"
+                  f" / 기록 {vk}")
+    return bytes(blob), ptrs, log
+
+
 # ------------------------------------------------------------------ 본편 대사
 def build_chains(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, list[str]]:
     """번역된 대화 체인을 새 자리에 다시 쓰고 앵커 즉치를 그쪽으로 돌린다.
@@ -787,6 +850,7 @@ def main() -> None:
     # (타일 번호, 글리프 문자들, 대체 코드 페이지 여부)
     recs: list[tuple[int, list[str], int]] = []
     namestr, nameids, namebar, nameroster, name_n, name_vocab = build_names(g, recs)
+    ending, ending_ptrs, ending_log = build_ending(g, recs)
     chains, chain_log = build_chains(rom, src, g)
     uistr, ui_log = build_ui(rom, src, g, recs)
     # 메뉴는 폰트가 아니라 미리 그려둔 그래픽이다. 글리프 풀과 타일맵 서술자를
@@ -861,6 +925,12 @@ def main() -> None:
     place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")
     place(rom, NAMEBAR_AT, namebar, "상태바 이름표")
     place(rom, NAMEROSTER_AT, nameroster, f"이름판·목록 이름표 (어휘 {name_vocab}자)")
+    place(rom, ENDING_AT, ending, "엔딩 조각 문자열")
+    for i, off in enumerate(ending_ptrs):
+        at = ENDING_TBL + i * 4
+        assert 0x208B0 <= int.from_bytes(rom[at:at + 4], "big") <= 0x209A0, \
+            f"{at:06X} 가 엔딩 조각 포인터가 아니다"
+        rom[at:at + 4] = (ENDING_AT + off).to_bytes(4, "big")
     place(rom, UISTR_AT, uistr, "UI 문자열표")
     place(rom, CHAIN_AT, chains, "대사 체인")
     place(rom, LABEL_AT, make_labels(), "승리/패배 라벨")
@@ -955,6 +1025,10 @@ def main() -> None:
     # 대체 코드 페이지들 — 원본 표를 복사하고 본문 코드만 다른 타일로 돌린다.
     # 그 페이지를 지정한 기록을 쓰는 문자열만 이렇게 그려지므로 남은 일본어는 무사하다.
     pages = bytearray()
+    print("\n엔딩 텍스트")
+    for ln in ending_log:
+        print(ln)
+
     for name, (idx, base, which) in sorted(PAGES.items(), key=lambda kv: kv[1][0]):
         assert len(pages) == (idx - 1) * 256, f"페이지 {name} 번호가 어긋난다"
         tbl = bytearray(rom[TABLE_AT:TABLE_AT + 256])

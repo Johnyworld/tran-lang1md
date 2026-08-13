@@ -51,6 +51,7 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 | `translation/names.tsv` | 이름판 78개 (`0x2AE64` 표 순서) |
 | `translation/ui.tsv` | UI — 클래스·마법·아이템 이름 |
 | `translation/menu.tsv` | 메뉴 그래픽. 창 레코드 + 줄 번호로 식별 |
+| `translation/ending.tsv` | 엔딩 가로 스크롤 문장. 조각 번호로 식별 |
 | `translation/glossary.tsv` | 고유명사 표기 결정과 근거 |
 
 ## 폰트
