@@ -85,7 +85,6 @@ Yes / No / ON / OFF / BGM           영어 라벨
 NEW GAME / LOAD GAME / CONTINUE     영어 라벨
 Scenario / Sound / Small Map / TURN 영어 라벨
 A+ / D+ / HP / MP / AT / DF / MV / LV / ITEM / Pts
-지휘관 이름판·목록 창의 이름         타일 예산이 대사 번역에 묶여 있다 (STATUS)
 030A1A 메뉴                         어느 글리프 풀과 짝인지 미확정
 ```
 

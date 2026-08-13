@@ -71,6 +71,7 @@ ROM_SIZE = 0x100000
 UPLOADER_AT, UPLOADER2_AT, UI_UPLOADER_AT = 0x80000, 0x80200, 0x80700
 LABEL_AT, NAMESTR_AT, NAMEIDS_AT = 0x80400, 0x80800, 0x81000
 NAMEBAR_AT = 0x81800     # 아래 상태바용 이름표 사본 (페이지 6)
+NAMEROSTER_AT = 0x82900  # 지휘관 이름판·목록 창용 이름표 사본 (공유 어휘)
 UISTR_AT, UITBL_AT, ALTTBL_AT = 0x82000, 0x83000, 0x8C000
 CLSB_AT = 0x8D000        # 전직 후보용 클래스표 사본
 TITLE_AT, TITLE_UP_AT = 0x8E000, 0x80D00   # 선택 창 제목 타일 + 업로더
@@ -167,6 +168,11 @@ SCREEN_PAGE = {"prologue": (0, SLOT_BASE, 64), "cond": (3, 192, 40), "stage": (4
 #   이름($E2FA)을 그린다. 화면 배치(클래스 … 이름)와 정확히 맞고 한 번에 한 유닛만
 #   보이므로 안전하다. 실기 스크린샷에서 이름만 가타카나로 남아 잡혔다.
 NAMEPTR_BAR = (0x00C486, 0x00F9BE, 0x00FA6C)
+# 여러 이름이 **동시에** 보이는 자리들. 공유 어휘 사본으로 돌린다.
+#   0x01083A  출전 준비 화면 위·아래 지휘관 이름판 8개 (그리기 $60BE -> $5F60)
+#   0x0114DE  출전 준비 화면 지휘관 목록 창 (2열 x 6줄)
+#   0x013590  지휘관 목록 창 (다른 진입)
+NAMEPTR_ROSTER = (0x01083A, 0x0114DE, 0x013590)
 BAR_CELLS = 4
 ALT_BASE = 221            # (호환용 — 페이지 1 의 시작 타일)
 BG, INK, OUTLINE = 13, 15, 14
@@ -392,7 +398,38 @@ def build_names(g: Glyphs,
         if len(ids) > BAR_CELLS:
             raise SystemExit(f"이름 {k} {name!r} 이 상태바 {BAR_CELLS}칸을 넘는다")
         bar += (bytes([BAR_MARKER, len(recs) - 1]) + bytes(cells)).ljust(16, b"\x00")
-    return bytes(strs), bytes(idtbl), bytes(bar), n
+
+    # 지휘관 이름판·목록 창용 사본 — **여러 이름이 동시에 보인다.**
+    # 위의 위치 코드 방식(타일 192..197 돌려쓰기)으로는 모든 줄이 마지막 이름으로
+    # 변하므로 오래 미뤄 뒀다. 용병 클래스와 같은 해법을 쓴다: 표 전체 어휘를
+    # 한 기록에 담고 이름마다 자기 음절의 코드를 적는다. 이름 78개가 한글 음절
+    # **57종**으로 끝나므로 본문 코드 64개에 다 들어간다(실측).
+    #
+    # 타일은 본문 슬롯 128.. 을 그대로 쓴다. 이 화면에 일본어가 없어지면 가나 폰트
+    # 자리가 비므로 충돌 상대는 우리 것뿐이고, 마법·아이템 공유 어휘(128..184)와
+    # 대사 글리프가 그 자리를 쓴다 — 둘 다 **이 화면에 같이 안 보인다.**
+    # 어휘 순서는 이름 번호순이라 지휘관(0..10)이 앞쪽 타일을 차지한다. 출전 준비
+    # 화면의 아이템 목록(159..184)과 겹치는 것은 뒤쪽 이름들뿐이다.
+    vocab: list[str] = []
+    for k in range(n):
+        for ch in ko.get(str(k), ""):
+            if ch not in ASCII_OK and ch not in vocab:
+                vocab.append(ch)
+    if len(vocab) > len(CODES):
+        raise SystemExit(f"이름 어휘 {len(vocab)}자가 본문 코드 {len(CODES)}개를 넘는다")
+    vk, vmap = len(recs), {ch: CODES[i] for i, ch in enumerate(vocab)}
+    recs.append((SLOT_BASE, vocab, 0))
+    roster = bytearray()
+    for k in range(n):
+        name = ko.get(str(k), "")
+        cells = bytearray()
+        for ch in name:
+            cells.append(ord(ch) if ch in ASCII_OK else vmap[ch])
+        if len(cells) > NAME_CELLS:
+            raise SystemExit(f"이름 {k} {name!r} 이 {NAME_CELLS}칸을 넘는다")
+        cells += b" " * (NAME_CELLS - len(cells)) + b"\xff"
+        roster += (bytes([UI_MARKER, vk]) + bytes(cells)).ljust(16, b"\x00")
+    return bytes(strs), bytes(idtbl), bytes(bar), bytes(roster), n, len(vocab)
 
 
 # ------------------------------------------------------------------ UI 텍스트
@@ -741,7 +778,7 @@ def main() -> None:
     # 글리프 기록표는 이름·UI·프롤로그가 함께 쓴다. UI 업로더가 k 로 색인한다.
     # (타일 번호, 글리프 문자들, 대체 코드 페이지 여부)
     recs: list[tuple[int, list[str], int]] = []
-    namestr, nameids, namebar, name_n = build_names(g, recs)
+    namestr, nameids, namebar, nameroster, name_n, name_vocab = build_names(g, recs)
     chains, chain_log = build_chains(rom, src, g)
     uistr, ui_log = build_ui(rom, src, g, recs)
     # 메뉴는 폰트가 아니라 미리 그려둔 그래픽이다. 글리프 풀과 타일맵 서술자를
@@ -815,6 +852,7 @@ def main() -> None:
     place(rom, NAMESTR_AT, namestr, "이름 문자열표")
     place(rom, NAMEIDS_AT, nameids, "이름 글리프ID표")
     place(rom, NAMEBAR_AT, namebar, "상태바 이름표")
+    place(rom, NAMEROSTER_AT, nameroster, f"이름판·목록 이름표 (어휘 {name_vocab}자)")
     place(rom, UISTR_AT, uistr, "UI 문자열표")
     place(rom, CHAIN_AT, chains, "대사 체인")
     place(rom, LABEL_AT, make_labels(), "승리/패배 라벨")
@@ -844,10 +882,14 @@ def main() -> None:
         assert int.from_bytes(rom[imm:imm + 4], "big") == NAMETBL_ORIG, \
             f"{imm:06X} 가 이름표 즉치 아님"
         rom[imm:imm + 4] = NAMESTR_AT.to_bytes(4, "big")
-    for imm in NAMEPTR_BAR:              # 아래 상태바는 사본으로 (타일 124..127)
+    for imm in NAMEPTR_BAR:              # 아래 상태바는 사본으로 (타일 119..122)
         assert int.from_bytes(rom[imm:imm + 4], "big") == NAMETBL_ORIG, \
             f"{imm:06X} 가 이름표 즉치 아님"
         rom[imm:imm + 4] = NAMEBAR_AT.to_bytes(4, "big")
+    for imm in NAMEPTR_ROSTER:           # 이름판·목록 창은 공유 어휘 사본으로
+        assert int.from_bytes(rom[imm:imm + 4], "big") == NAMETBL_ORIG, \
+            f"{imm:06X} 가 이름표 즉치 아님"
+        rom[imm:imm + 4] = NAMEROSTER_AT.to_bytes(4, "big")
 
     # 코드 -> 타일 매핑은 전 화면 공통이므로 한 번만
     for i, c in enumerate(CODES):
