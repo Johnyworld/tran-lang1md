@@ -12,6 +12,9 @@ SHA1   cc67c5a3b91e706b495eb561a95a038fff72b5da
 헤더   (C)T-25 1991.JAN / GM T-25103-00 / J
 ```
 
+배포 페이지: **https://johnyworld.github.io/tran-lang1md/**
+최신 패치: [Releases](https://github.com/Johnyworld/tran-lang1md/releases/latest)
+
 ## 현황 — 한글화 완료 (실기 검수 완료)
 
 ```
