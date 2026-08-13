@@ -715,7 +715,14 @@ def bake_records(recs: list[tuple[int, list[str], int]], g: Glyphs) -> bytes:
 # 우리는 `0x7E` 를 안 쓰므로 오프셋이 0 이고, 표준 코드->타일 표가 그대로 맞는다.
 # 조각마다 `[0x01][k]` 를 달아 기록 하나(어휘 전체)를 올린다 — 스크롤 중 여러 조각이
 # 동시에 보이는데 어휘를 공유하므로 서로 덮지 않는다. 엔딩 화면에는 다른 한글이 없다.
-ENDING_TBL, ENDING_N, ENDING_CELLS = 0x2087C, 14, 17
+# 조각 피치는 **정확히 16칸**이다. 실측 근거 둘.
+#   17칸 조각의 마지막 글자가 다음 조각 첫 글자에 덮였다 (`멸망하지` -> `멸망하않는다고`)
+#   10칸 조각 뒤에 한 바퀴 전 글자가 남았다 (`안 된다。음의 정의를`)
+# 그래서 글자는 15칸 이하로 두고(경계에 공백이 하나는 남게) **16칸까지 공백으로 채워**
+# 이전 글자를 지운다. 원본 조각도 다 16자 이하다 — 탁점(`だ`)이 2바이트 1칸이라
+# 바이트 수로 세면 18칸으로 잘못 보인다.
+ENDING_TBL, ENDING_N = 0x2087C, 14
+ENDING_PITCH, ENDING_CELLS = 16, 15
 ENDING_TSV = Path("translation/ending.tsv")
 
 
@@ -739,21 +746,22 @@ def build_ending(g: Glyphs, recs: list[tuple[int, list[str], int]]) -> tuple[byt
         if not ko:
             if blank is None:                       # 공백 조각은 하나만 두고 공유한다
                 blank = len(blob)
-                blob += b" " * ENDING_CELLS + b"\xff"
+                blob += b" " * ENDING_PITCH + b"\xff"
             ptrs.append(blank)
             log.append(f"  {i:2d} 공백")
             continue
         if len(ko) > ENDING_CELLS:
-            raise SystemExit(f"엔딩 조각 {i} {ko!r} 이 {ENDING_CELLS}칸을 넘는다")
+            raise SystemExit(f"엔딩 조각 {i} {ko!r} 이 {ENDING_CELLS}칸을 넘는다 "
+                             f"(피치 {ENDING_PITCH}칸 - 경계 공백 1칸)")
         ptrs.append(len(blob))
         blob += bytes([UI_MARKER, vk])
         for ch in ko:
             blob.append(ord(ch) if ch in ASCII_OK else vmap[ch])
-        blob += b"\xff"
+        blob += b" " * (ENDING_PITCH - len(ko)) + b"\xff"
         log.append(f"  {i:2d} {len(ko):2d}칸  {ko}")
     if blank is None:                               # 남는 포인터는 공백으로 채운다
         blank = len(blob)
-        blob += b" " * ENDING_CELLS + b"\xff"
+        blob += b" " * ENDING_PITCH + b"\xff"
     while len(ptrs) < ENDING_N:
         ptrs.append(blank)
     log.insert(0, f"  어휘 {len(vocab)}자 / 타일 {SLOT_BASE}..{SLOT_BASE + len(vocab) - 1}"
