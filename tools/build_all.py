@@ -79,6 +79,7 @@ RESTBL_AT, BATTLE_AT = 0x8F000, 0x98000   # 리소스 패치 표 / 전투씬 라
 DEPLOY_AT, DEPLOY_UP_AT = 0x99000, 0x80E00   # 출전 준비 라벨 타일 + 업로더 2개
 BAR_TILE_AT, BAR_UP_AT = 0x99800, 0x80F00    # 전투씬 빈칸 바 타일 + 복원 업로더
 ENDING_AT = 0x99900                          # 엔딩 조각 문자열
+EPILOG_AT = 0x99A00                          # 에필로그 카드 문자열
 KFONT_AT, TEXT_AT, CHAIN_AT = 0x90000, 0xA0000, 0xB0000
 
 HOOK_SITE, STRDRAW, TABLE_AT = 0x18D12, 0x5F60, 0x62BC
@@ -769,6 +770,58 @@ def build_ending(g: Glyphs, recs: list[tuple[int, list[str], int]]) -> tuple[byt
     return bytes(blob), ptrs, log
 
 
+# -------------------------------------------------------------------- 에필로그 카드
+# 엔딩 뒤 인물별 후일담 카드. 초상 + 대사 한 줄 + 후일담 2~3줄 + 이름판 + 클래스명.
+# 문자열 11개가 표 하나로 관리된다 (10번은 죽은 지휘관용 공용 문구).
+#
+# ```
+# 0x3A322  문자열 포인터 11개 (홀수 정렬 아님, 4바이트씩)
+# ```
+# 이 화면의 일본어가 우리 글리프와 섞여 보였던 이유: **히라가나는 타일 +0x40** 으로
+# 그려지는데(`0x0609E: add.w $FF9134, d3`) 그 결과가 224..255 라서 우리 UI 슬롯
+# (용병 221..244 / 상태창 라벨 245..250)과 겹친다. 번역하면 사라진다.
+#
+# 다행히 그 오프셋은 **코드 0xA6..0xDD 에만** 적용된다(`0x06092` 의 범위 검사).
+# 우리 본문 코드는 0x7F..0xA0 / 0xE0..0xFD 라 그 범위 밖이므로 평소 방식이 그대로 통한다.
+# 이름판(192..197)·클래스명(198..205)이 같은 화면에 있으니 본문 슬롯 128..191 을 쓴다.
+EPILOG_TBL, EPILOG_LINE = 0x3A322, 25
+EPILOG_TSV = Path("translation/epilogue.tsv")
+
+
+def build_epilogue(g: Glyphs, recs: list[tuple[int, list[str], int]]) -> tuple[bytes, list[int], list[str]]:
+    """에필로그 카드 문자열. 카드마다 자기 어휘 기록을 하나씩 쓴다."""
+    rows = [ln.split("\t") for ln in EPILOG_TSV.read_text().rstrip("\n").split("\n")[1:]]
+    blob, ptrs, log = bytearray(), [], []
+    for r in rows:
+        idx, who, ko = int(r[0]), r[1], (r[3] if len(r) > 3 else "")
+        if not ko:
+            raise SystemExit(f"에필로그 {idx} 번역이 비어 있다")
+        lines = ko.split("\\n")
+        for ln in lines:
+            if len(ln) > EPILOG_LINE:
+                raise SystemExit(f"에필로그 {idx} 줄 {ln!r} 이 {EPILOG_LINE}칸을 넘는다")
+        vocab: list[str] = []
+        for ch in ko.replace("\\n", ""):
+            if ch not in ASCII_OK and ch not in vocab:
+                vocab.append(ch)
+        if len(vocab) > len(CODES):
+            raise SystemExit(f"에필로그 {idx} 어휘 {len(vocab)}자가 "
+                             f"본문 코드 {len(CODES)}개를 넘는다")
+        vmap = {ch: CODES[i] for i, ch in enumerate(vocab)}
+        ptrs.append(len(blob))
+        blob += bytes([UI_MARKER, len(recs)])
+        recs.append((SLOT_BASE, vocab, 0))
+        for ln_i, ln in enumerate(lines):
+            if ln_i:
+                blob.append(0x0D)                  # 줄바꿈 (렌더러가 위치를 +0x80)
+            for ch in ln:
+                blob.append(ord(ch) if ch in ASCII_OK else vmap[ch])
+        blob += b"\xff"
+        log.append(f"  {idx:2d} {who:6s} 어휘 {len(vocab):2d}자 / "
+                   f"{len([x for x in lines if x])}줄  {lines[0]}")
+    return bytes(blob), ptrs, log
+
+
 # ------------------------------------------------------------------ 본편 대사
 def build_chains(rom: bytearray, src: bytes, g: Glyphs) -> tuple[bytes, list[str]]:
     """번역된 대화 체인을 새 자리에 다시 쓰고 앵커 즉치를 그쪽으로 돌린다.
@@ -859,6 +912,7 @@ def main() -> None:
     recs: list[tuple[int, list[str], int]] = []
     namestr, nameids, namebar, nameroster, name_n, name_vocab = build_names(g, recs)
     ending, ending_ptrs, ending_log = build_ending(g, recs)
+    epilog, epilog_ptrs, epilog_log = build_epilogue(g, recs)
     chains, chain_log = build_chains(rom, src, g)
     uistr, ui_log = build_ui(rom, src, g, recs)
     # 메뉴는 폰트가 아니라 미리 그려둔 그래픽이다. 글리프 풀과 타일맵 서술자를
@@ -934,6 +988,12 @@ def main() -> None:
     place(rom, NAMEBAR_AT, namebar, "상태바 이름표")
     place(rom, NAMEROSTER_AT, nameroster, f"이름판·목록 이름표 (어휘 {name_vocab}자)")
     place(rom, ENDING_AT, ending, "엔딩 조각 문자열")
+    place(rom, EPILOG_AT, epilog, "에필로그 카드 문자열")
+    for i, off in enumerate(epilog_ptrs):
+        at = EPILOG_TBL + i * 4
+        assert 0x20CC0 <= int.from_bytes(rom[at:at + 4], "big") <= 0x21000, \
+            f"{at:06X} 가 에필로그 문자열 포인터가 아니다"
+        rom[at:at + 4] = (EPILOG_AT + off).to_bytes(4, "big")
     for i, off in enumerate(ending_ptrs):
         at = ENDING_TBL + i * 4
         assert 0x208B0 <= int.from_bytes(rom[at:at + 4], "big") <= 0x209A0, \
@@ -1035,6 +1095,9 @@ def main() -> None:
     pages = bytearray()
     print("\n엔딩 텍스트")
     for ln in ending_log:
+        print(ln)
+    print("\n에필로그 카드")
+    for ln in epilog_log:
         print(ln)
 
     for name, (idx, base, which) in sorted(PAGES.items(), key=lambda kv: kv[1][0]):
