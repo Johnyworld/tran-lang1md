@@ -230,7 +230,32 @@ def apply_bps(src: bytes, patch: bytes) -> bytes:
     return bytes(out)
 
 
+def cmd_apply(args: list[str]) -> None:
+    """`--apply <패치> [<롬>] [<출력>]` — 맥에서 별도 패처 없이 적용한다.
+
+    BPS 는 원본·결과 CRC32 를 검사하므로 롬이 다르면 여기서 멈춘다.
+    """
+    patch_path = Path(args[0])
+    rom_path = Path(args[1]) if len(args) > 1 else SRC
+    out_path = Path(args[2]) if len(args) > 2 else Path("work/korom_patched.md")
+    patch, rom = patch_path.read_bytes(), rom_path.read_bytes()
+    apply_ = apply_bps if patch[:4] == b"BPS1" else apply_ips
+    out = apply_(rom, patch)
+    out_path.write_bytes(out)
+    print(f"{patch_path.name} -> {out_path}")
+    print(f"  입력 {len(rom):,}B  CRC32 {zlib.crc32(rom):08X}")
+    print(f"  출력 {len(out):,}B  CRC32 {zlib.crc32(out):08X}")
+    total = sum(int.from_bytes(out[p:p + 2], "big")
+                for p in range(0x200, len(out), 2)) & 0xFFFF
+    stored = int.from_bytes(out[0x18E:0x190], "big")
+    print(f"  체크섬 {stored:04X} / 실제 {total:04X}  "
+          + ("일치" if stored == total else "불일치 — 패치나 롬이 잘못됐다"))
+
+
 def main() -> None:
+    if "--apply" in sys.argv:
+        i = sys.argv.index("--apply")
+        return cmd_apply(sys.argv[i + 1:])
     src, dst = SRC.read_bytes(), ROM.read_bytes()
     if int.from_bytes(dst[0x18E:0x190], "big") == 0:
         raise SystemExit("체크섬 우회가 남아 있다 — python3 tools/build_all.py --release 로 빌드할 것")

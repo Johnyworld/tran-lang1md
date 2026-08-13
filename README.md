@@ -40,6 +40,12 @@ python3 tools/patch.py                   # work/korom.bps + work/korom.ips
 다르면 실패한다. 패치 파일은 원본 그래픽 일부를 품으므로 레포에 커밋하지 않는다
 (`work/` 는 gitignore).
 
+패치 적용도 이 도구로 된다 (맥에서 별도 패처 설치 없이).
+
+```
+python3 tools/patch.py --apply work/korom.bps <원본롬> [출력파일]
+```
+
 ```
 적용 대상   Langrisser.md  524288B  SHA1 cc67c5a3b91e706b495eb561a95a038fff72b5da
                                     CRC32 B6EA5016

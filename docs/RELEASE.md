@@ -121,3 +121,22 @@ work/korom.ips   IPS — 구형 패처 호환용
 문제없다 (IPS 는 원본 끝을 넘는 레코드를 이어 붙이고 BPS 는 결과 크기를 헤더에 적는다).
 
 `work/` 는 gitignore 다. 패치는 원본 그래픽 일부를 품으므로 레포에 커밋하지 않는다.
+
+## 7. 패치 적용 (검수·배포 확인용)
+
+맥에서 별도 패처 없이 확인할 수 있다.
+
+```
+python3 tools/patch.py --apply work/korom.bps ~/Downloads/Langrisser.md work/langrisser_ko.md
+```
+
+BPS 는 원본·결과 CRC32 를 검사하므로 롬이 다르면 그 자리에서 멈춘다. 적용 후 헤더
+체크섬(`0x18E`)과 실제 워드 합이 일치하는지도 찍는다.
+
+배포할 때 받는 사람에게는 이 조합을 안내한다.
+
+```
+Rom Patcher JS   https://www.marcrobledo.com/RomPatcher.js/   웹, 브라우저 안에서 처리
+MultiPatch       macOS GUI. BPS/IPS 지원
+Flips            beat 계열 CLI/GUI
+```
