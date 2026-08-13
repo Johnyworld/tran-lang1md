@@ -85,7 +85,8 @@ Yes / No / ON / OFF / BGM           영어 라벨
 NEW GAME / LOAD GAME / CONTINUE     영어 라벨
 Scenario / Sound / Small Map / TURN 영어 라벨
 A+ / D+ / HP / MP / AT / DF / MV / LV / ITEM / Pts
-030A1A 메뉴                         어느 글리프 풀과 짝인지 미확정
+030A1A 메뉴 (데이터/?/전체맵)        죽은 코드 — 여는 루틴 0x103F0 을 부르는 곳이
+                                    없고, 가운데 항목은 원본에서도 깨져 있다
 ```
 
 ## 5. 배포 전 검사
