@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>랑그릿사 한글 패치 — 메가드라이브</title>
+<meta name="description" content="메가드라이브판 랑그릿사(1991) 한국어 번역 패치. 대사·이름·메뉴·UI·엔딩 전체 한글화. BPS/IPS 패치 배포.">
+<meta property="og:title" content="랑그릿사 한글 패치">
+<meta property="og:description" content="메가드라이브판 랑그릿사 한국어 번역 패치 — 대사 576메시지, 이름판 78개, 메뉴·UI·엔딩까지">
+<meta property="og:type" content="website">
+<style>
+  :root{
+    --navy-0:#04081f; --navy-1:#0a1440; --navy-2:#12245e; --navy-3:#1b3688;
+    --gold-0:#f6e27a; --gold-1:#e0b83c; --gold-2:#8c6a18;
+    --ink:#eef3ff; --dim:#9fb2e6; --cyan:#7fe9ff; --gem:#5aa9ff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --pixel:"Galmuri11","Galmuri7","DungGeunMo","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; padding:0 1rem 5rem; font-family:var(--pixel); color:var(--ink);
+    background:
+      radial-gradient(1200px 600px at 50% -10%, #1a2f70 0%, transparent 60%),
+      linear-gradient(180deg,var(--navy-0) 0%, #050a24 40%, var(--navy-0) 100%);
+    background-color:var(--navy-0); min-height:100vh; line-height:1.7;
+    letter-spacing:.01em;
+  }
+  /* CRT 주사선 — 아주 옅게 */
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:9;
+    background:repeating-linear-gradient(180deg, rgba(0,0,0,.16) 0 1px, transparent 1px 3px);
+    mix-blend-mode:multiply;
+  }
+  .wrap{max-width:52rem; margin:0 auto}
+
+  /* ── 메가드라이브 창 느낌: 금테 두 겹 + 네 모서리 보석 ── */
+  .win{
+    position:relative; margin:1.6rem 0; padding:1.4rem 1.5rem;
+    background:linear-gradient(180deg,var(--navy-2) 0%, var(--navy-1) 100%);
+    border:3px solid var(--gold-1);
+    box-shadow:
+      inset 0 0 0 3px var(--navy-3),
+      inset 0 0 0 5px var(--gold-2),
+      0 0 0 1px #000, 0 14px 34px rgba(0,0,0,.55);
+  }
+  .win::before,.win::after{
+    content:""; position:absolute; width:9px; height:9px; background:var(--gem);
+    border:2px solid #dff1ff; box-shadow:0 0 8px var(--gem);
+  }
+  .win::before{top:-6px; left:-6px}
+  .win::after{bottom:-6px; right:-6px}
+  .win>.gem-tr,.win>.gem-bl{
+    position:absolute; width:9px; height:9px; background:var(--gem);
+    border:2px solid #dff1ff; box-shadow:0 0 8px var(--gem);
+  }
+  .win>.gem-tr{top:-6px; right:-6px}
+  .win>.gem-bl{bottom:-6px; left:-6px}
+
+  h1{
+    margin:0; font-size:clamp(1.7rem,6vw,2.9rem); line-height:1.25;
+    color:var(--gold-0); text-shadow:0 3px 0 var(--gold-2), 0 5px 12px rgba(0,0,0,.7);
+    letter-spacing:.02em;
+  }
+  header{padding:3.2rem 0 .4rem; text-align:center}
+  header .sub{color:var(--dim); font-size:.95rem; margin-top:.7rem}
+  header .ver{
+    display:inline-block; margin-top:1rem; padding:.28rem .8rem; font-family:var(--mono);
+    font-size:.8rem; color:#07142f; background:linear-gradient(180deg,var(--gold-0),var(--gold-1));
+    border:2px solid #fff8d8;
+  }
+  h2{
+    margin:0 0 1rem; font-size:1.05rem; color:var(--gold-0); letter-spacing:.08em;
+    padding-bottom:.6rem; border-bottom:2px solid rgba(224,184,60,.35);
+  }
+  h2 .mark{color:var(--cyan); margin-right:.5rem}
+  h3{margin:1.4rem 0 .5rem; font-size:.95rem; color:var(--cyan); letter-spacing:.04em}
+  p{margin:.6rem 0}
+  a{color:var(--cyan)}
+  a:hover{color:#fff}
+  code,kbd{font-family:var(--mono); font-size:.86em}
+  .dim{color:var(--dim)}
+  .small{font-size:.86rem}
+
+  /* ── 다운로드: JRPG 메뉴 항목처럼 ── */
+  .menu{display:grid; gap:.7rem; margin:.2rem 0 1rem}
+  .item{
+    display:flex; align-items:center; gap:.9rem; width:100%; text-decoration:none;
+    padding:.95rem 1.1rem; color:var(--ink);
+    background:linear-gradient(180deg,rgba(27,54,136,.75),rgba(10,20,64,.75));
+    border:2px solid rgba(224,184,60,.5); transition:transform .08s, background .12s, border-color .12s;
+  }
+  .item:hover,.item:focus-visible{
+    background:linear-gradient(180deg,rgba(45,86,190,.9),rgba(16,32,96,.9));
+    border-color:var(--gold-0); transform:translateX(3px); outline:none;
+  }
+  .item .cur{color:var(--gold-0); opacity:0; font-family:var(--mono)}
+  .item:hover .cur,.item:focus-visible .cur{opacity:1}
+  .item .name{font-weight:700}
+  .item .meta{margin-left:auto; font-family:var(--mono); font-size:.78rem; color:var(--dim); text-align:right}
+  .item .rec{
+    font-family:var(--mono); font-size:.7rem; color:#07142f; padding:.1rem .45rem; margin-left:.5rem;
+    background:linear-gradient(180deg,var(--gold-0),var(--gold-1));
+  }
+
+  /* ── 표 ── */
+  table{width:100%; border-collapse:collapse; font-family:var(--mono); font-size:.8rem}
+  .scroll{overflow-x:auto; -webkit-overflow-scrolling:touch}
+  th,td{padding:.5rem .6rem; text-align:left; border-bottom:1px solid rgba(159,178,230,.18); white-space:nowrap}
+  th{color:var(--gold-0); font-weight:400}
+  td.hash{color:var(--cyan)}
+
+  ol.steps{margin:.4rem 0 0; padding-left:1.3rem}
+  ol.steps>li{margin:.55rem 0}
+  ul.check{list-style:none; margin:.2rem 0; padding:0; columns:2; column-gap:1.6rem}
+  ul.check li{margin:.3rem 0; break-inside:avoid}
+  ul.check li::before{content:"◆"; color:var(--cyan); margin-right:.5rem; font-size:.8em}
+  ul.warn{list-style:none; margin:.2rem 0; padding:0}
+  ul.warn li{margin:.7rem 0; padding-left:1.4rem; position:relative}
+  ul.warn li::before{content:"!"; position:absolute; left:0; color:var(--gold-0); font-family:var(--mono)}
+  .note{
+    margin-top:1rem; padding:.8rem 1rem; font-size:.86rem; color:var(--dim);
+    background:rgba(4,8,31,.5); border-left:3px solid var(--gold-2);
+  }
+  footer{max-width:52rem; margin:2.4rem auto 0; text-align:center; color:var(--dim); font-size:.8rem}
+  footer a{color:var(--dim); text-decoration:underline}
+  @media (max-width:32rem){
+    ul.check{columns:1}
+    .item{flex-wrap:wrap}
+    .item .meta{margin-left:0; width:100%; text-align:left}
+  }
+  @media (prefers-reduced-motion:reduce){ .item{transition:none} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>랑그릿사 한글 패치</h1>
+  <div class="sub">메가드라이브 · 1991 · 비공식 팬 번역</div>
+  <div class="ver">v1.0 · 2026-08-13</div>
+</header>
+
+<section class="win" aria-labelledby="dl">
+  <span class="gem-tr"></span><span class="gem-bl"></span>
+  <h2 id="dl"><span class="mark">▼</span>패치 받기</h2>
+  <div class="menu">
+    <a class="item" href="https://github.com/Johnyworld/tran-lang1md/releases/latest/download/langrisser-ko.bps">
+      <span class="cur">▶</span>
+      <span class="name">langrisser-ko.bps<span class="rec">권장</span></span>
+      <span class="meta">BPS · 87KB<br>원본 롬을 스스로 검사한다</span>
+    </a>
+    <a class="item" href="https://github.com/Johnyworld/tran-lang1md/releases/latest/download/langrisser-ko.ips">
+      <span class="cur">▶</span>
+      <span class="name">langrisser-ko.ips</span>
+      <span class="meta">IPS · 98KB<br>구형 패처 호환용</span>
+    </a>
+  </div>
+  <p class="small dim">롬은 들어 있지 않습니다. 본인이 소유한 카트리지에서 덤프한 롬에 적용하세요.</p>
+</section>
+
+<section class="win" aria-labelledby="how">
+  <span class="gem-tr"></span><span class="gem-bl"></span>
+  <h2 id="how"><span class="mark">▼</span>적용 방법</h2>
+
+  <h3>웹브라우저 — 설치 없이</h3>
+  <ol class="steps">
+    <li><a href="https://www.marcrobledo.com/RomPatcher.js/">Rom Patcher JS</a> 를 엽니다.</li>
+    <li><b>ROM file</b> 에 원본 롬, <b>Patch file</b> 에 <code>langrisser-ko.bps</code> 를 넣습니다.</li>
+    <li><b>Apply patch</b> 를 누르면 패치된 롬이 내려옵니다.</li>
+  </ol>
+  <p class="small dim">브라우저 안에서만 처리되며 파일이 서버로 올라가지 않습니다.</p>
+
+  <h3>macOS · Windows · CLI</h3>
+  <ol class="steps">
+    <li>macOS — <a href="https://github.com/sappharad/MultiPatch">MultiPatch</a> (BPS/IPS 지원 GUI)</li>
+    <li>Windows — <a href="https://github.com/Alcaro/Flips">Flips</a> 의 <i>Apply patch</i></li>
+    <li>CLI — <code>flips --apply langrisser-ko.bps &lt;원본롬&gt; &lt;출력롬&gt;</code></li>
+  </ol>
+
+  <div class="note">
+    BPS 를 권하는 이유는 <b>원본 롬의 체크섬을 패치가 직접 검사</b>하기 때문입니다.
+    롬이 다르면 패처가 거부하므로, 조용히 깨진 롬이 만들어지지 않습니다.
+    IPS 에는 그 검사가 없으니 아래 해시를 먼저 확인하세요.
+  </div>
+</section>
+
+<section class="win" aria-labelledby="verify">
+  <span class="gem-tr"></span><span class="gem-bl"></span>
+  <h2 id="verify"><span class="mark">▼</span>롬 확인</h2>
+  <div class="scroll">
+    <table>
+      <tr><th></th><th>적용할 롬 (일본판)</th><th>적용 결과</th></tr>
+      <tr><td>크기</td><td>524,288 B</td><td>1,048,576 B</td></tr>
+      <tr><td>CRC32</td><td class="hash">B6EA5016</td><td class="hash">A0285D68</td></tr>
+      <tr><td>SHA1</td><td class="hash">cc67c5a3…72b5da</td><td class="hash">d6399668…3cb3a7</td></tr>
+    </table>
+  </div>
+  <p class="small dim">
+    전체 SHA1 — 원본 <code>cc67c5a3b91e706b495eb561a95a038fff72b5da</code> ·
+    결과 <code>d639966899e384686fa359c9c7abd054eb3cb3a7</code><br>
+    헤더는 <code>(C)T-25 1991.JAN / GM T-25103-00 / J</code> 입니다.
+    롬이 1MB 로 커지는 것은 정상입니다 — 번역문과 한글 글리프를 넣을 자리가 원본에 없었습니다.
+  </p>
+</section>
+
+<section class="win" aria-labelledby="scope">
+  <span class="gem-tr"></span><span class="gem-bl"></span>
+  <h2 id="scope"><span class="mark">▼</span>번역 범위</h2>
+  <ul class="check">
+    <li>본편 대사 576메시지 (사망 대사 포함)</li>
+    <li>스테이지 프롤로그·승패 조건 20종</li>
+    <li>인물 이름 78개</li>
+    <li>클래스 91 · 마법 14 · 아이템 10</li>
+    <li>메뉴·시스템 문구 전체</li>
+    <li>전투 화면 · 출전 준비 · 대상 선택 라벨</li>
+    <li>엔딩 스크롤 문장</li>
+    <li>에필로그 인물 카드 11개</li>
+  </ul>
+  <p class="small dim">
+    <code>PLAYER</code> <code>Yes/No</code> <code>LV</code> <code>HP</code> <code>NEW GAME</code> 같은
+    영어 표기는 원본 픽셀 그대로 두었습니다.
+  </p>
+</section>
+
+<section class="win" aria-labelledby="warn">
+  <span class="gem-tr"></span><span class="gem-bl"></span>
+  <h2 id="warn"><span class="mark">▼</span>알아 둘 것</h2>
+  <ul class="warn">
+    <li><b>패치 전에 만든 세이브 스테이트는 쓰지 마세요.</b> 스테이트가 그래픽 메모리를 그대로
+      들고 있어서 글자가 깨져 보입니다. 리셋하고 새로 시작하거나 게임 내 저장에서 이어가세요.
+      배터리 세이브(<code>.srm</code>)는 원본과 호환됩니다.</li>
+    <li>실기(플래시 카트)에서도 동작합니다. 매퍼를 쓰지 않고 헤더 체크섬을 정상값으로 다시
+      계산해 넣었습니다.</li>
+    <li>스테이지 4 를 지원군(5턴) 등장 전에 끝내면 일부 대사의 이름·초상이 다른 인물로 나옵니다.
+      화자를 "참가자 목록의 뒤에서 N번째" 로 지정하는 <b>원본 방식</b> 때문이며 패치가 만든
+      문제가 아닙니다.</li>
+    <li>전투 메뉴의 <b>저장</b> 은 원문 <span class="dim">中断</span>(중단 세이브)입니다.
+      실제 동작이 저장이라 그렇게 옮겼습니다.</li>
+  </ul>
+</section>
+
+<section class="win" aria-labelledby="about">
+  <span class="gem-tr"></span><span class="gem-bl"></span>
+  <h2 id="about"><span class="mark">▼</span>만든 것에 대하여</h2>
+  <p>
+    폰트 구조와 텍스트 인코딩을 역해석하고, 한글 글리프를 문자열이 직접 들고 다니게 만들어
+    타일 한계를 넘겼습니다. 분석 기록·도구·번역 원고는 모두 공개되어 있습니다.
+  </p>
+  <p>
+    <a href="https://github.com/Johnyworld/tran-lang1md">저장소</a> ·
+    <a href="https://github.com/Johnyworld/tran-lang1md/blob/main/docs/STATUS.md">분석 기록</a> ·
+    <a href="https://github.com/Johnyworld/tran-lang1md/issues">문제 신고</a>
+  </p>
+  <div class="note">
+    한글 폰트 — 본문·UI 는 <a href="https://font.emulog.app">Galmuri</a> (OFL-1.1),
+    메뉴·라벨 그래픽은 둥근모꼴을 썼습니다.<br>
+    게임의 저작권은 원저작권자에게 있습니다. 이 패치는 번역 데이터와 그것을 적용하는 차분만을
+    담고 있으며 게임 데이터를 배포하지 않습니다. 원저작권자·발행사와 아무 관계가 없는
+    비공식 팬 번역입니다.
+  </div>
+</section>
+
+</div>
+<footer>
+  랑그릿사 한글 패치 v1.0 · 비공식 팬 번역 ·
+  <a href="https://github.com/Johnyworld/tran-lang1md">github.com/Johnyworld/tran-lang1md</a>
+</footer>
+</body>
+</html>
