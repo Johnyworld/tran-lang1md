@@ -71,6 +71,7 @@ python3 tools/patch.py --apply work/korom.bps <원본롬> [출력파일]
 | `tools/debug_rom.py` | 테스트용 — 아군을 강하게 → `work/korom_debug.md` |
 | `tools/release_check.py` | 배포판 검사 — 번역 아닌 변경이 남았는지 (`docs/RELEASE.md`) |
 | `tools/patch.py` | 배포 패치 생성 (IPS + BPS) — 재적용 검증 포함 |
+| `tools/webfont.py` | 배포 페이지용 웹폰트 부분집합 (`assets/*.woff2`) — fonttools 필요 |
 | `tools/chain.py` | 본편 대사 체인 파서 (앵커 하나 = 대화 한 덩이) |
 | `tools/events.py` | 스테이지 이벤트 표 -> 앵커 (이야기 순서) |
 | `tools/sheet.py` | `translation/dialogue.tsv` 재생성 (기존 번역 보존) |
@@ -103,9 +104,14 @@ python3 tools/patch.py --apply work/korom.bps <원본롬> [출력파일]
 빌드가 쓰는 것은 둘이다.
 
 ```
-font/galmuri7/    본문·UI 글리프 (8x8 급). Galmuri (OFL-1.1) https://font.emulog.app
-font/dunggeunmo/  메뉴·라벨 그래픽 (16x16). 둥근모꼴
+font/galmuri7/    본문·UI 글리프 (8x8 급)   Galmuri7  OFL-1.1  (c) Lee Minseo (quiple)
+font/dunggeunmo/  메뉴·라벨 그래픽 (16x16)  DungGeunMo  Public Domain  Kil Hyung-jin / Kim Jung-tae
 ```
+
+배포 페이지도 **같은 폰트**를 쓴다. `tools/webfont.py` 가 `index.html` 의 표시 문자만
+골라 부분집합을 굽고(합쳐서 16KB), 두 폰트의 합집합이 페이지를 덮는지 검사한다.
+Galmuri 의 OFL 에는 예약 폰트 이름 조항이 없어 부분집합도 같은 이름으로 쓸 수 있다
+(라이선스 사본 `assets/OFL.txt`).
 
 `font/galmuri11/` 등 나머지는 초기 비교용으로 남겨 둔 것이다 (선정 근거는 STATUS).
 

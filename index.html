@@ -9,22 +9,36 @@
 <meta property="og:description" content="메가드라이브판 랑그릿사 한국어 번역 패치 — 대사 576메시지, 이름판 78개, 메뉴·UI·엔딩까지">
 <meta property="og:type" content="website">
 <style>
+  /* 번역에 쓴 폰트를 그대로 쓴다. 페이지에 나오는 글자만 골라낸 부분집합이라 합쳐서 16KB.
+     Galmuri11 — OFL-1.1, (c) 2019-2025 Lee Minseo (quiple). 예약 폰트 이름 조항이 없어
+                 부분집합도 같은 이름으로 쓸 수 있다. 라이선스 사본은 assets/OFL.txt.
+     DungGeunMo(둥근모꼴) — Public Domain, Kil Hyung-jin / Kim Jung-tae.
+     둘 다 16x16 비트맵 원본이라 **글자 크기를 16px 배수**로 두어야 선이 흐려지지 않는다. */
+  @font-face{
+    font-family:"Galmuri11"; src:url("assets/galmuri11.woff2") format("woff2");
+    font-weight:400; font-style:normal; font-display:swap;
+  }
+  @font-face{
+    font-family:"DungGeunMo"; src:url("assets/dunggeunmo.woff2") format("woff2");
+    font-weight:400; font-style:normal; font-display:swap;
+  }
   :root{
     --navy-0:#04081f; --navy-1:#0a1440; --navy-2:#12245e; --navy-3:#1b3688;
     --gold-0:#f6e27a; --gold-1:#e0b83c; --gold-2:#8c6a18;
     --ink:#eef3ff; --dim:#9fb2e6; --cyan:#7fe9ff; --gem:#5aa9ff;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    --pixel:"Galmuri11","Galmuri7","DungGeunMo","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+    --pixel:"Galmuri11","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+    --title:"DungGeunMo","Galmuri11","Apple SD Gothic Neo",system-ui,sans-serif;
   }
   *{box-sizing:border-box}
   html{-webkit-text-size-adjust:100%}
   body{
-    margin:0; padding:0 1rem 5rem; font-family:var(--pixel); color:var(--ink);
+    margin:0; padding:0 1rem 80px; font-family:var(--pixel); color:var(--ink);
+    font-size:16px; -webkit-font-smoothing:none; -moz-osx-font-smoothing:unset;
     background:
       radial-gradient(1200px 600px at 50% -10%, #1a2f70 0%, transparent 60%),
       linear-gradient(180deg,var(--navy-0) 0%, #050a24 40%, var(--navy-0) 100%);
-    background-color:var(--navy-0); min-height:100vh; line-height:1.7;
-    letter-spacing:.01em;
+    background-color:var(--navy-0); min-height:100vh; line-height:28px;
   }
   /* CRT 주사선 — 아주 옅게 */
   body::before{
@@ -58,29 +72,32 @@
   .win>.gem-bl{bottom:-6px; left:-6px}
 
   h1{
-    margin:0; font-size:clamp(1.7rem,6vw,2.9rem); line-height:1.25;
+    margin:0; font-family:var(--title); font-size:48px; line-height:64px;
     color:var(--gold-0); text-shadow:0 3px 0 var(--gold-2), 0 5px 12px rgba(0,0,0,.7);
-    letter-spacing:.02em;
+    letter-spacing:2px;
   }
-  header{padding:3.2rem 0 .4rem; text-align:center}
-  header .sub{color:var(--dim); font-size:.95rem; margin-top:.7rem}
+  header{padding:48px 0 8px; text-align:center}
+  header .sub{color:var(--dim); font-size:16px; margin-top:12px}
   header .ver{
-    display:inline-block; margin-top:1rem; padding:.28rem .8rem; font-family:var(--mono);
-    font-size:.8rem; color:#07142f; background:linear-gradient(180deg,var(--gold-0),var(--gold-1));
-    border:2px solid #fff8d8;
+    display:inline-block; margin-top:16px; padding:2px 12px; font-family:var(--title);
+    font-size:16px; line-height:24px; color:#07142f;
+    background:linear-gradient(180deg,var(--gold-0),var(--gold-1)); border:2px solid #fff8d8;
   }
   h2{
-    margin:0 0 1rem; font-size:1.05rem; color:var(--gold-0); letter-spacing:.08em;
-    padding-bottom:.6rem; border-bottom:2px solid rgba(224,184,60,.35);
+    margin:0 0 16px; font-family:var(--title); font-size:16px; line-height:24px;
+    color:var(--gold-0); letter-spacing:1px;
+    padding-bottom:10px; border-bottom:2px solid rgba(224,184,60,.35);
   }
   h2 .mark{color:var(--cyan); margin-right:.5rem}
-  h3{margin:1.4rem 0 .5rem; font-size:.95rem; color:var(--cyan); letter-spacing:.04em}
+  h3{margin:24px 0 8px; font-family:var(--title); font-size:16px; line-height:24px;
+   color:var(--cyan); letter-spacing:1px}
   p{margin:.6rem 0}
   a{color:var(--cyan)}
   a:hover{color:#fff}
-  code,kbd{font-family:var(--mono); font-size:.86em}
+  code,kbd,table,.item .meta{-webkit-font-smoothing:antialiased}
+  code,kbd{font-family:var(--mono); font-size:13px}
   .dim{color:var(--dim)}
-  .small{font-size:.86rem}
+  .small{font-size:16px; color:var(--dim)}
 
   /* ── 다운로드: JRPG 메뉴 항목처럼 ── */
   .menu{display:grid; gap:.7rem; margin:.2rem 0 1rem}
@@ -96,15 +113,16 @@
   }
   .item .cur{color:var(--gold-0); opacity:0; font-family:var(--mono)}
   .item:hover .cur,.item:focus-visible .cur{opacity:1}
-  .item .name{font-weight:700}
-  .item .meta{margin-left:auto; font-family:var(--mono); font-size:.78rem; color:var(--dim); text-align:right}
+  .item .name{color:var(--gold-0)}   /* 비트맵 폰트에 굵기가 없다 — 색으로 구분 */
+  .item .meta{margin-left:auto; font-family:var(--mono); font-size:13px; line-height:20px;
+            color:var(--dim); text-align:right}
   .item .rec{
-    font-family:var(--mono); font-size:.7rem; color:#07142f; padding:.1rem .45rem; margin-left:.5rem;
+    font-family:var(--title); font-size:16px; color:#07142f; padding:0 6px; margin-left:8px;
     background:linear-gradient(180deg,var(--gold-0),var(--gold-1));
   }
 
   /* ── 표 ── */
-  table{width:100%; border-collapse:collapse; font-family:var(--mono); font-size:.8rem}
+  table{width:100%; border-collapse:collapse; font-family:var(--mono); font-size:13px}
   .scroll{overflow-x:auto; -webkit-overflow-scrolling:touch}
   th,td{padding:.5rem .6rem; text-align:left; border-bottom:1px solid rgba(159,178,230,.18); white-space:nowrap}
   th{color:var(--gold-0); font-weight:400}
@@ -114,17 +132,18 @@
   ol.steps>li{margin:.55rem 0}
   ul.check{list-style:none; margin:.2rem 0; padding:0; columns:2; column-gap:1.6rem}
   ul.check li{margin:.3rem 0; break-inside:avoid}
-  ul.check li::before{content:"◆"; color:var(--cyan); margin-right:.5rem; font-size:.8em}
+  ul.check li::before{content:"◆"; color:var(--cyan); margin-right:.5rem}
   ul.warn{list-style:none; margin:.2rem 0; padding:0}
   ul.warn li{margin:.7rem 0; padding-left:1.4rem; position:relative}
   ul.warn li::before{content:"!"; position:absolute; left:0; color:var(--gold-0); font-family:var(--mono)}
   .note{
-    margin-top:1rem; padding:.8rem 1rem; font-size:.86rem; color:var(--dim);
+    margin-top:16px; padding:12px 16px; font-size:16px; color:var(--dim);
     background:rgba(4,8,31,.5); border-left:3px solid var(--gold-2);
   }
-  footer{max-width:52rem; margin:2.4rem auto 0; text-align:center; color:var(--dim); font-size:.8rem}
+  footer{max-width:52rem; margin:40px auto 0; text-align:center; color:var(--dim); font-size:16px}
   footer a{color:var(--dim); text-decoration:underline}
   @media (max-width:32rem){
+    h1{font-size:32px; line-height:44px}
     ul.check{columns:1}
     .item{flex-wrap:wrap}
     .item .meta{margin-left:0; width:100%; text-align:left}
@@ -253,8 +272,10 @@
     <a href="https://github.com/Johnyworld/tran-lang1md/issues">문제 신고</a>
   </p>
   <div class="note">
-    한글 폰트 — 본문·UI 는 <a href="https://font.emulog.app">Galmuri</a> (OFL-1.1),
-    메뉴·라벨 그래픽은 둥근모꼴을 썼습니다.<br>
+    한글 폰트 — 번역과 이 페이지 모두 같은 폰트를 씁니다.
+    본문은 <a href="https://github.com/quiple/galmuri">Galmuri11</a>
+    (OFL-1.1 · <a href="assets/OFL.txt">라이선스</a>),
+    제목과 게임 내 메뉴·라벨 그래픽은 둥근모꼴(DungGeunMo, Public Domain)입니다.<br>
     게임의 저작권은 원저작권자에게 있습니다. 이 패치는 번역 데이터와 그것을 적용하는 차분만을
     담고 있으며 게임 데이터를 배포하지 않습니다. 원저작권자·발행사와 아무 관계가 없는
     비공식 팬 번역입니다.
