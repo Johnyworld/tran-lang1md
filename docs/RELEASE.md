@@ -77,7 +77,8 @@ python3 tools/debug_rom.py [--weak-enemy]   ->  work/korom_debug.md
 
 ## 4. 번역하지 않기로 결정한 것 (되돌릴 것 없음)
 
-배포판에 원문으로 남는다. 결정 근거는 STATUS 참고.
+배포판에 원문으로 남는다. **2026-08-13 최종 확정** — 영어 라벨은 그래픽으로
+한글화하지 않는다. 결정 근거는 STATUS 참고.
 
 ```
 PLAYER / ENEMY / FRIENDLY / VS      영어 라벨
