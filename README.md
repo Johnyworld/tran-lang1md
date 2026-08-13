@@ -97,8 +97,14 @@ python3 tools/patch.py --apply work/korom.bps <원본롬> [출력파일]
 
 ## 폰트
 
-`font/galmuri11/` — Galmuri11 한글 2350자, 16×16 1bpp (OFL-1.1).
-출처: https://font.emulog.app
+빌드가 쓰는 것은 둘이다.
+
+```
+font/galmuri7/    본문·UI 글리프 (8x8 급). Galmuri (OFL-1.1) https://font.emulog.app
+font/dunggeunmo/  메뉴·라벨 그래픽 (16x16). 둥근모꼴
+```
+
+`font/galmuri11/` 등 나머지는 초기 비교용으로 남겨 둔 것이다 (선정 근거는 STATUS).
 
 ## 작업 환경
 
